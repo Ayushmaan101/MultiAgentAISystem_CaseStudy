@@ -13,7 +13,7 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_ROUTING_MODEL = "llama3.2"
+OLLAMA_ROUTING_MODEL = "phi3.5"
 
 DB_PATH = "./db/embeddings.db"
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"

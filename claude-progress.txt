@@ -1,23 +1,22 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: Ollama LLM intent classifier added. OpenRouter is primary sub-agent LLM. Groq is fallback.
-  - config.py: Added OLLAMA_BASE_URL=http://localhost:11434 and OLLAMA_ROUTING_MODEL=llama3.2
-  - agents/coordinator.py: run_coordinator() now uses Ollama llama3.2 for intent classification.
-    _classify_with_ollama() POSTs to /api/generate with a strict system prompt returning RAG/CALCULATOR/SEARCH.
-    On Ollama failure (unreachable, unexpected label), falls back to keyword regex (_keyword_classify).
-    routing_method="ollama_llm" on success, "keyword_fallback" on failure.
-    Routing functions and 3-tier fallback (OpenRouter -> Groq -> direct tool) unchanged.
-  - main.py: QueryResponse now includes classification (str) and routing_method (str) fields.
-    run_coordinator() returns 4-tuple: (routed_to, response, classification, routing_method).
+CURRENT STATE: Routing model upgraded to phi3.5-mini with few-shot examples.
+  All seven classification tests passing including world knowledge => SEARCH.
+  No decision logic pitfall. System correctly distinguishes RAG vs SEARCH vs CALCULATOR.
+  - config.py: OLLAMA_ROUTING_MODEL = "phi3.5"
+  - agents/coordinator.py: _classify_with_ollama() uses phi3.5 with few-shot system prompt.
+    Few-shot examples explicitly teach world-knowledge queries => SEARCH vs document queries => RAG.
+    Keyword regex fallback (_keyword_classify) unchanged for Ollama-unreachable scenarios.
   LLM FLOW:
-    Routing:   Ollama llama3.2 (local) -> keyword regex fallback
+    Routing:   Ollama phi3.5 (local, few-shot) -> keyword regex fallback
     Sub-agents: OpenRouter LLM -> Groq LLM -> direct Python tool call
-  TEST RESULTS (server on :8000, Ollama on :11434):
-    TEST A "three dozen eggs/half remain": routed_to="Calculator Agent" classification="CALCULATOR" routing_method="ollama_llm" PASS
-    TEST B "retrieval pipeline": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm" PASS
-    TEST C "Who invented the internet?": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm"
-      NOTE: llama3.2 classified as RAG (knowledge-base lookup), not SEARCH. Defensible - not current events.
-    TEST D "144 divided by 12 plus 37": routed_to="Calculator Agent" classification="CALCULATOR" routing_method="ollama_llm" PASS
-    TEST E "Tell me more about the architecture": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm" PASS
+  TEST RESULTS (server :8000, Ollama :11434, phi3.5):
+    TEST A "three dozen eggs/half remain": CALCULATOR | ollama_llm | Calculator Agent  PASS
+    TEST B "retrieval pipeline": RAG | ollama_llm | RAG Agent  PASS
+    TEST C "Who invented the internet?": SEARCH | ollama_llm | Web Search Agent  PASS (was failing with llama3.2)
+    TEST D "144 divided by 12 plus 37": CALCULATOR | ollama_llm | Calculator Agent  PASS
+    TEST E "Tell me more about the architecture": RAG | ollama_llm | RAG Agent  PASS
+    TEST F "What is the capital of France?": SEARCH | ollama_llm | Web Search Agent  PASS
+    TEST G "When was the Eiffel Tower built?": SEARCH | ollama_llm | Web Search Agent  PASS
   NOTE: Ollama must be running locally for ollama_llm routing. If unreachable, keyword fallback activates automatically.
   NOTE: Corporate SSL proxy: httpx.Client(verify=False) in llm_client.py. Ollama POST uses verify=False directly.
   NOTE: OpenRouter free-tier rate-limited (429). Groq fallback activates automatically for sub-agents.

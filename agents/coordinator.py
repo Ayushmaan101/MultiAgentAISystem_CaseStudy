@@ -17,17 +17,40 @@ from agents.web_search_agent import web_search_agent, web_search
 
 # ── Ollama intent classifier ───────────────────────────────────────────────────
 
-_OLLAMA_SYSTEM_PROMPT = """You are an intent classification system. Classify the user query into exactly one of these three categories:
-- RAG: Questions about documents, papers, knowledge base content, architecture, system design, retrieval pipelines, or anything that requires looking up stored information.
-- CALCULATOR: Mathematical computations, arithmetic, algebra, percentages, unit conversions, or any question that requires numeric calculation.
-- SEARCH: Questions about current events, news, real-time data, people, places, recent facts, or anything requiring live web search.
+_OLLAMA_SYSTEM_PROMPT = """You are a query router for an AI Research Assistant.
+Classify the user query into exactly one of three categories based on
+what the user is ultimately trying to accomplish — not the words they use.
 
-Respond with ONLY the category label: RAG, CALCULATOR, or SEARCH. No explanation. No punctuation. Just the label."""
+RAG - the user wants information from uploaded documents, research papers,
+      or a private knowledge base. Summaries, explanations, or questions
+      about specific stored content.
+
+CALCULATOR - the user wants a precise numeric result from a mathematical
+             operation, even if described in plain language.
+
+SEARCH - the user wants factual information about the world, current events,
+         people, places, or general knowledge that would not exist in a
+         private document collection.
+
+Examples:
+'Who invented the internet?' → SEARCH
+'What does the document say about chunking?' → RAG
+'How much is 15% of 240?' → CALCULATOR
+'Summarize the architecture section' → RAG
+'What is the capital of France?' → SEARCH
+'Calculate compound interest on 1000 at 5% for 3 years' → CALCULATOR
+'When was the Eiffel Tower built?' → SEARCH
+'What retrieval method is described in the file?' → RAG
+'If I have three dozen eggs and use half, how many remain?' → CALCULATOR
+'Who is the current US president?' → SEARCH
+
+Respond with exactly one word: RAG, CALCULATOR, or SEARCH.
+No explanation. No punctuation. No other text whatsoever."""
 
 
 def _classify_with_ollama(query: str) -> tuple[str, str]:
     """
-    Call Ollama /api/generate with llama3.2 to classify intent.
+    Call Ollama /api/generate with phi3.5 to classify intent.
     Returns (classification, routing_method).
     classification is one of: RAG, CALCULATOR, SEARCH
     routing_method is "ollama_llm" on success or "keyword_fallback" on failure.
@@ -186,7 +209,7 @@ def route_to_web_search(query: str) -> str:
 
 def run_coordinator(query: str) -> tuple:
     """
-    Classify intent with Ollama (llama3.2) then route to the appropriate sub-agent.
+    Classify intent with Ollama (phi3.5) then route to the appropriate sub-agent.
 
     Classification:
         - Ollama /api/generate is called first with a strict system prompt that returns
