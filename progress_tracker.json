@@ -4,6 +4,7 @@
   "tech_stack": {
     "orchestration": "Agno Agent OS (FastAPI Backend)",
     "llm_gateway": "OpenRouter (Llama 3.3 70B / DeepSeek V3)",
+    "intent_classifier": "Ollama llama3.2 (local, http://localhost:11434) with keyword-regex fallback",
     "vector_database": "DuckDB with vss extension (and pure SQL cosine fallback)",
     "embeddings": "Local BAAI/bge-small-en-v1.5 via sentence-transformers",
     "tools": ["Tavily Search API", "asteval Safe Calculator", "Local Document Lookup RAG"]

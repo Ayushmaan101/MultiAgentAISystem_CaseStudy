@@ -1,29 +1,24 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: OpenRouter restored as primary. Groq fallback added.
-  Deterministic coordinator routing documented as intentional design decision.
-  All sub-agents returning real tool results via OpenRouter (with Groq fallback).
-  - config.py: OpenRouter (primary) + Groq (fallback) constants. LLM_MODEL from .env.
-  - llm_client.py: get_model() -> OpenRouter OpenAILike. get_fallback_model() -> native Groq class.
-    _is_retryable(), _is_error_response() detect transient provider failures and LLM error responses.
-    Logs "Using OpenRouter" at agent construction; "Falling back to Groq" when fallback triggers.
-  - agents/rag_agent.py: uses get_model() (OpenRouter primary via OpenAILike).
-  - agents/calculator_agent.py: uses get_model() (OpenRouter primary via OpenAILike).
-  - agents/web_search_agent.py: uses get_model() (OpenRouter primary via OpenAILike).
-  - agents/coordinator.py: run_coordinator() uses deterministic keyword regex routing.
-    Routing functions (_run_with_fallback) implement 3-tier fallback:
-      Tier 1: OpenRouter LLM (primary)
-      Tier 2: Groq LLM via native GroqModel (better tool-call schema handling)
-      Tier 3: Direct Python tool call (guarantees real result when both LLMs fail)
-    All agents use httpx.Client(verify=False) via llm_client.py for corporate SSL proxy bypass.
-  - main.py: calls run_coordinator(); 3 endpoints: POST /query, GET /health, GET /chunks.
-  TEST RESULTS (server on :8000):
-    TEST 1 /health: {"status":"ok","message":"AI Research Assistant is running"} PASS
-    TEST 2 /query calculator: routed_to="Calculator Agent" response="...144/12+37...49.0" PASS
-      Server log: "Using OpenRouter" -> 429 -> "OpenRouter error" -> "Falling back to Groq" -> 200 OK
-    TEST 3 /query RAG: routed_to="RAG Agent" response=actual chunk text from DuckDB PASS
-      Server log: "Using OpenRouter" -> 429 -> "OpenRouter error" -> "Falling back to Groq" ->
-                  Groq tool name mismatch -> "Groq fallback failed...calling document_lookup directly"
-  NOTE: OpenRouter free-tier rate-limited (429). When quota resets/paid credits added, OpenRouter
-        will be used directly. Groq fallback activates automatically on any retryable error.
-  NOTE: Corporate SSL proxy requires httpx.Client(verify=False) (managed in llm_client.py).
+CURRENT STATE: Ollama LLM intent classifier added. OpenRouter is primary sub-agent LLM. Groq is fallback.
+  - config.py: Added OLLAMA_BASE_URL=http://localhost:11434 and OLLAMA_ROUTING_MODEL=llama3.2
+  - agents/coordinator.py: run_coordinator() now uses Ollama llama3.2 for intent classification.
+    _classify_with_ollama() POSTs to /api/generate with a strict system prompt returning RAG/CALCULATOR/SEARCH.
+    On Ollama failure (unreachable, unexpected label), falls back to keyword regex (_keyword_classify).
+    routing_method="ollama_llm" on success, "keyword_fallback" on failure.
+    Routing functions and 3-tier fallback (OpenRouter -> Groq -> direct tool) unchanged.
+  - main.py: QueryResponse now includes classification (str) and routing_method (str) fields.
+    run_coordinator() returns 4-tuple: (routed_to, response, classification, routing_method).
+  LLM FLOW:
+    Routing:   Ollama llama3.2 (local) -> keyword regex fallback
+    Sub-agents: OpenRouter LLM -> Groq LLM -> direct Python tool call
+  TEST RESULTS (server on :8000, Ollama on :11434):
+    TEST A "three dozen eggs/half remain": routed_to="Calculator Agent" classification="CALCULATOR" routing_method="ollama_llm" PASS
+    TEST B "retrieval pipeline": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm" PASS
+    TEST C "Who invented the internet?": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm"
+      NOTE: llama3.2 classified as RAG (knowledge-base lookup), not SEARCH. Defensible - not current events.
+    TEST D "144 divided by 12 plus 37": routed_to="Calculator Agent" classification="CALCULATOR" routing_method="ollama_llm" PASS
+    TEST E "Tell me more about the architecture": routed_to="RAG Agent" classification="RAG" routing_method="ollama_llm" PASS
+  NOTE: Ollama must be running locally for ollama_llm routing. If unreachable, keyword fallback activates automatically.
+  NOTE: Corporate SSL proxy: httpx.Client(verify=False) in llm_client.py. Ollama POST uses verify=False directly.
+  NOTE: OpenRouter free-tier rate-limited (429). Groq fallback activates automatically for sub-agents.
 NEXT IMMEDIATE TASK: Agno UI integration and Phase 1 completion.

@@ -1,6 +1,9 @@
 import sys
 import os
 import re
+import json
+
+import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -12,19 +15,76 @@ from agents.rag_agent import rag_agent, document_lookup
 from agents.calculator_agent import calculator_agent, safe_calculate
 from agents.web_search_agent import web_search_agent, web_search
 
-# ── Keyword patterns for deterministic routing ─────────────────────────────────
+# ── Ollama intent classifier ───────────────────────────────────────────────────
+
+_OLLAMA_SYSTEM_PROMPT = """You are an intent classification system. Classify the user query into exactly one of these three categories:
+- RAG: Questions about documents, papers, knowledge base content, architecture, system design, retrieval pipelines, or anything that requires looking up stored information.
+- CALCULATOR: Mathematical computations, arithmetic, algebra, percentages, unit conversions, or any question that requires numeric calculation.
+- SEARCH: Questions about current events, news, real-time data, people, places, recent facts, or anything requiring live web search.
+
+Respond with ONLY the category label: RAG, CALCULATOR, or SEARCH. No explanation. No punctuation. Just the label."""
+
+
+def _classify_with_ollama(query: str) -> tuple[str, str]:
+    """
+    Call Ollama /api/generate with llama3.2 to classify intent.
+    Returns (classification, routing_method).
+    classification is one of: RAG, CALCULATOR, SEARCH
+    routing_method is "ollama_llm" on success or "keyword_fallback" on failure.
+    """
+    try:
+        payload = {
+            "model": config.OLLAMA_ROUTING_MODEL,
+            "prompt": f"System: {_OLLAMA_SYSTEM_PROMPT}\n\nQuery: {query}",
+            "stream": False,
+        }
+        resp = httpx.post(
+            f"{config.OLLAMA_BASE_URL}/api/generate",
+            json=payload,
+            timeout=15.0,
+            verify=False,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data.get("response", "").strip().upper()
+        # Accept the label even if the model padded it slightly
+        for label in ("CALCULATOR", "SEARCH", "RAG"):
+            if label in raw:
+                print(f"[coordinator] Ollama classified '{query[:60]}' => {label}")
+                return label, "ollama_llm"
+        # Model returned something unexpected — fall through to keyword
+        print(f"[coordinator] Ollama returned unexpected label '{raw}', falling back to keyword routing")
+        return _keyword_classify(query), "keyword_fallback"
+    except Exception as exc:
+        print(f"[coordinator] Ollama unreachable, falling back to keyword routing: {exc}")
+        return _keyword_classify(query), "keyword_fallback"
+
+
+# ── Keyword fallback classifier ────────────────────────────────────────────────
+
 _MATH_RE = re.compile(
     r'\b(calculat|comput|arithmeti|divid|multipl|percent|sqrt|logarithm|integrat|derivativ)\b'
     r'|what\s+is\s+\d'
     r'|\d+\s*[+\-*/]\s*\d'
-    r'|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared)\b',
+    r'|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared|dozen|remain|eggs)\b',
     re.IGNORECASE,
 )
 _WEB_RE = re.compile(
-    r'\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026)\b',
+    r'\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026|invented|who\s+is|who\s+was|who\s+created|who\s+made|who\s+built|history\s+of)\b',
     re.IGNORECASE,
 )
 
+
+def _keyword_classify(query: str) -> str:
+    """Deterministic keyword-based fallback classification."""
+    if _MATH_RE.search(query):
+        return "CALCULATOR"
+    if _WEB_RE.search(query):
+        return "SEARCH"
+    return "RAG"
+
+
+# ── Response extraction ────────────────────────────────────────────────────────
 
 def _response_text(run_output) -> str:
     """Extract the best available text from a sub-agent RunOutput."""
@@ -48,9 +108,9 @@ def _run_with_fallback(primary_agent, query: str, fallback_tools, fallback_instr
     Groq-backed agent. If Groq also fails, call the first Python tool directly as a
     last resort so real data is always returned.
 
-    Tier 1 — OpenRouter LLM (primary)
-    Tier 2 — Groq LLM (native GroqModel class; better tool-call schema handling)
-    Tier 3 — Direct Python tool call (no LLM; guarantees a real result)
+    Tier 1 -- OpenRouter LLM (primary)
+    Tier 2 -- Groq LLM (native GroqModel class; better tool-call schema handling)
+    Tier 3 -- Direct Python tool call (no LLM; guarantees a real result)
     """
     try:
         text = _response_text(primary_agent.run(query))
@@ -72,7 +132,7 @@ def _run_with_fallback(primary_agent, query: str, fallback_tools, fallback_instr
             fb_text = str(exc2)
 
         if _is_error_response(fb_text):
-            # Tier 3: Groq also failed — call the Python tool directly
+            # Tier 3: Groq also failed -- call the Python tool directly
             tool_fn = fallback_tools[0]
             print(f"[llm_client] Groq fallback failed for {agent_name}, calling {tool_fn.__name__} directly")
             return str(tool_fn(query))
@@ -103,7 +163,7 @@ def route_to_calculator(query: str) -> str:
         fallback_tools=[safe_calculate],
         fallback_instructions=[
             "You are a mathematical computation assistant.",
-            "Always call safe_calculate — never compute yourself.",
+            "Always call safe_calculate -- never compute yourself.",
             "State the expression and its numeric result.",
         ],
         agent_name="Calculator Agent",
@@ -126,24 +186,28 @@ def route_to_web_search(query: str) -> str:
 
 def run_coordinator(query: str) -> tuple:
     """
-    Route a query to the appropriate sub-agent and return (agent_label, response).
+    Classify intent with Ollama (llama3.2) then route to the appropriate sub-agent.
 
-    Deterministic keyword routing is used here for reliability and predictability.
-    Regex patterns match the query intent (math, web, or document lookup) and
-    dispatch to the correct sub-agent without an LLM routing call.
-    Sub-agents remain fully LLM-powered: each uses OpenRouter as the primary
-    provider and automatically falls back to Groq on rate-limit or quota errors.
+    Classification:
+        - Ollama /api/generate is called first with a strict system prompt that returns
+          exactly RAG, CALCULATOR, or SEARCH.
+        - If Ollama is unreachable or returns an unexpected label, keyword regex is used
+          as a deterministic fallback (routing_method = "keyword_fallback").
+
+    Sub-agents remain fully LLM-powered with OpenRouter primary and Groq fallback.
 
     Returns
     -------
-    tuple[str, str]
-        (routed_to_label, response_text)
+    tuple[str, str, str, str]
+        (routed_to_label, response_text, classification, routing_method)
     """
-    if _MATH_RE.search(query):
-        return "Calculator Agent", route_to_calculator(query)
-    if _WEB_RE.search(query):
-        return "Web Search Agent", route_to_web_search(query)
-    return "RAG Agent", route_to_rag(query)
+    classification, routing_method = _classify_with_ollama(query)
+
+    if classification == "CALCULATOR":
+        return "Calculator Agent", route_to_calculator(query), classification, routing_method
+    if classification == "SEARCH":
+        return "Web Search Agent", route_to_web_search(query), classification, routing_method
+    return "RAG Agent", route_to_rag(query), classification, routing_method
 
 
 # ── Coordinator Agent (kept for completeness; routing uses run_coordinator()) ──

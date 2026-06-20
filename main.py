@@ -35,6 +35,8 @@ class QueryResponse(BaseModel):
     routed_to: str
     response: str
     status: str
+    classification: str = ""
+    routing_method: str = ""
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -70,12 +72,14 @@ def get_chunks(limit: int = Query(default=10, ge=1, le=500)):
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(request: QueryRequest):
     try:
-        routed_to, content = run_coordinator(request.query)
+        routed_to, content, classification, routing_method = run_coordinator(request.query)
         return QueryResponse(
             query=request.query,
             routed_to=routed_to,
             response=content,
             status="success",
+            classification=classification,
+            routing_method=routing_method,
         )
     except Exception as exc:
         return QueryResponse(
@@ -83,4 +87,6 @@ def query_endpoint(request: QueryRequest):
             routed_to="Unknown",
             response=str(exc),
             status="error",
+            classification="",
+            routing_method="",
         )
