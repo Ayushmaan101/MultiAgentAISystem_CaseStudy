@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import httpx
 from agno.agent import Agent
-from agno.models.openai.like import OpenAILike
+from agno.models.groq import Groq
 from tavily import TavilyClient
 
 import config
@@ -33,10 +33,9 @@ def web_search(query: str) -> dict:
 
 web_search_agent = Agent(
     name="Web Search Agent",
-    model=OpenAILike(
-        id=config.LLM_MODEL,
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
+    model=Groq(
+        id=config.GROQ_MODEL,
+        api_key=config.GROQ_API_KEY,
         http_client=_http_client,
     ),
     tools=[web_search],

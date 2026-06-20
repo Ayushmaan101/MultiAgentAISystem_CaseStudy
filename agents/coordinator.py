@@ -1,59 +1,87 @@
 import sys
 import os
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import httpx
 from agno.agent import Agent
-from agno.models.openai.like import OpenAILike
+from agno.models.groq import Groq
 
 import config
-
-_http_client = httpx.Client(verify=False)
 from agents.rag_agent import rag_agent
 from agents.calculator_agent import calculator_agent
 from agents.web_search_agent import web_search_agent
 
+_http_client = httpx.Client(verify=False)
 
-def _route_to_rag(query: str) -> str:
+# Keyword patterns for deterministic routing
+_MATH_RE = re.compile(
+    r'\b(calculat|comput|arithmeti|divid|multipl|percent|sqrt|logarithm|integrat|derivativ)\b'
+    r'|what\s+is\s+\d'
+    r'|\d+\s*[+\-*/]\s*\d'
+    r'|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared)\b',
+    re.IGNORECASE,
+)
+_WEB_RE = re.compile(
+    r'\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026)\b',
+    re.IGNORECASE,
+)
+
+
+def _response_text(run_output) -> str:
+    content = getattr(run_output, "content", None) or ""
+    if not isinstance(content, str):
+        content = str(content)
+    has_words = any(c.isalpha() for c in content)
+    if has_words and content.strip():
+        return content
+    for t in (getattr(run_output, "tools", None) or []):
+        if not getattr(t, "tool_call_error", True) and t.result:
+            return str(t.result)
+    return content
+
+
+def route_to_rag(query: str) -> str:
     """Route query to the RAG Agent for document/knowledge-base lookups."""
-    response = rag_agent.run(query)
-    return response.content if hasattr(response, "content") else str(response)
+    return _response_text(rag_agent.run(query))
 
 
-def _route_to_calculator(query: str) -> str:
+def route_to_calculator(query: str) -> str:
     """Route query to the Calculator Agent for math and numerical computations."""
-    response = calculator_agent.run(query)
-    return response.content if hasattr(response, "content") else str(response)
+    return _response_text(calculator_agent.run(query))
 
 
-def _route_to_web_search(query: str) -> str:
+def route_to_web_search(query: str) -> str:
     """Route query to the Web Search Agent for current or external information."""
-    response = web_search_agent.run(query)
-    return response.content if hasattr(response, "content") else str(response)
+    return _response_text(web_search_agent.run(query))
 
 
+def run_coordinator(query: str) -> tuple:
+    """Deterministic keyword router — calls the right sub-agent directly."""
+    if _MATH_RE.search(query):
+        return "Calculator Agent", route_to_calculator(query)
+    if _WEB_RE.search(query):
+        return "Web Search Agent", route_to_web_search(query)
+    return "RAG Agent", route_to_rag(query)
+
+
+# Agent object kept for completeness; routing is handled by run_coordinator().
 coordinator = Agent(
     name="Coordinator",
-    model=OpenAILike(
-        id=config.LLM_MODEL,
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
+    model=Groq(
+        id=config.GROQ_MODEL,
+        api_key=config.GROQ_API_KEY,
         http_client=_http_client,
     ),
-    tools=[_route_to_rag, _route_to_calculator, _route_to_web_search],
+    tools=[route_to_rag, route_to_calculator, route_to_web_search],
+    tool_call_limit=1,
     instructions=[
-        "You are the Coordinator of a multi-agent AI research assistant.",
-        "For every user query you must:",
-        "  1. Classify the intent and state which agent you are routing to.",
-        "  2. Call exactly one of the routing tools and return its full response.",
-        "  3. Never answer directly without routing through a sub-agent.",
-        "",
-        "Routing rules (apply the first that matches):",
-        "  - Query is about documents, files, or knowledge-base content → call _route_to_rag",
-        "  - Query contains math, numbers, formulas, or calculations → call _route_to_calculator",
-        "  - Query needs current events, live data, or external information → call _route_to_web_search",
-        "  - Uncertain → call _route_to_rag as the safe default",
+        "You are a routing coordinator. ALWAYS call one of the routing tools.",
+        "  - Math/numbers/calculations => call route_to_calculator",
+        "  - Documents/knowledge base => call route_to_rag",
+        "  - Current events/web => call route_to_web_search",
+        "Never answer directly. Call a tool immediately.",
     ],
     markdown=True,
 )

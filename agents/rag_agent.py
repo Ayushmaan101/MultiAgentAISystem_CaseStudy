@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import httpx
 from agno.agent import Agent
-from agno.models.openai.like import OpenAILike
+from agno.models.groq import Groq
 
 import config
 import database
@@ -32,18 +32,16 @@ def document_lookup(query: str) -> dict:
 
 rag_agent = Agent(
     name="RAG Agent",
-    model=OpenAILike(
-        id=config.LLM_MODEL,
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
+    model=Groq(
+        id=config.GROQ_MODEL,
+        api_key=config.GROQ_API_KEY,
         http_client=_http_client,
     ),
     tools=[document_lookup],
     instructions=[
         "You are a document retrieval assistant.",
-        "Always call document_lookup before answering any question.",
-        "Always show the retrieved chunks (source file, similarity, content) in your response before giving the final answer.",
-        "Never answer document-related questions from memory alone — always ground your answer in the retrieved context.",
+        "Always call document_lookup before answering — never rely on memory.",
+        "Show each retrieved chunk (source file, similarity score, content excerpt) before giving your answer.",
     ],
     markdown=True,
 )

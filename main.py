@@ -4,24 +4,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 import database
-from agents.coordinator import coordinator
-
-# ── Tool-name → human-readable agent label ────────────────────────────────────
-_TOOL_TO_AGENT = {
-    "_route_to_rag": "RAG Agent",
-    "_route_to_calculator": "Calculator Agent",
-    "_route_to_web_search": "Web Search Agent",
-}
-
-
-def _detect_routed_agent(run_output) -> str:
-    """Inspect tool calls on the RunOutput to identify which sub-agent was used."""
-    tools = getattr(run_output, "tools", None) or []
-    for t in tools:
-        label = _TOOL_TO_AGENT.get(getattr(t, "tool_name", ""), None)
-        if label:
-            return label
-    return "Unknown"
+from agents.coordinator import run_coordinator
 
 
 # ── Lifespan (startup) ────────────────────────────────────────────────────────
@@ -87,11 +70,7 @@ def get_chunks(limit: int = Query(default=10, ge=1, le=500)):
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(request: QueryRequest):
     try:
-        run_output = coordinator.run(request.query)
-        routed_to = _detect_routed_agent(run_output)
-        content = run_output.content or ""
-        if not isinstance(content, str):
-            content = str(content)
+        routed_to, content = run_coordinator(request.query)
         return QueryResponse(
             query=request.query,
             routed_to=routed_to,

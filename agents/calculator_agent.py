@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import httpx
 from agno.agent import Agent
-from agno.models.openai.like import OpenAILike
+from agno.models.groq import Groq
 from asteval import Interpreter
 
 import config
@@ -27,18 +27,16 @@ def safe_calculate(expression: str) -> dict:
 
 calculator_agent = Agent(
     name="Calculator Agent",
-    model=OpenAILike(
-        id=config.LLM_MODEL,
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
+    model=Groq(
+        id=config.GROQ_MODEL,
+        api_key=config.GROQ_API_KEY,
         http_client=_http_client,
     ),
     tools=[safe_calculate],
     instructions=[
         "You are a mathematical computation assistant.",
-        "Always use the safe_calculate tool for any arithmetic, algebraic, or numerical computation.",
-        "Never compute math yourself — always delegate to the tool.",
-        "Show the expression and its result clearly in your response.",
+        "Always call safe_calculate for every math query — never compute yourself.",
+        "After the tool returns, clearly state the expression and its numeric result.",
     ],
     markdown=True,
 )
