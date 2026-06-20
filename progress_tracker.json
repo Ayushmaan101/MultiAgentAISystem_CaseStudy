@@ -18,7 +18,7 @@
         "Verify DuckDB connection",
         "Execute schema creation for table 'document_chunks' with correct metadata columns"
       ],
-      "status": "NOT_STARTED"
+      "status": "COMPLETED"
     },
     {
       "id": "F2_EMBED_FALLBACK",
@@ -29,7 +29,7 @@
         "Write vector search function using vss index matching",
         "Implement try/except catch block translating query to pure SQL math if vss driver fails"
       ],
-      "status": "NOT_STARTED"
+      "status": "COMPLETED"
     },
     {
       "id": "F3_RECURSIVE_INGEST",
