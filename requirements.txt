@@ -1,0 +1,26 @@
+# Core
+agno
+fastapi
+uvicorn
+
+# LLM Gateway
+openai  # OpenRouter is OpenAI-compatible
+
+# Database
+duckdb
+
+# Embeddings
+sentence-transformers
+torch
+
+# Document Parsing
+pypdf
+python-docx
+
+# Tools
+tavily-python
+asteval
+
+# Utilities
+python-dotenv
+pydantic

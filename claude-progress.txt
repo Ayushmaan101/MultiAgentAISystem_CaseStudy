@@ -1,0 +1,3 @@
+PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
+CURRENT STATE: Harness rules established. venv created and dependencies installed. No code written yet.
+NEXT IMMEDIATE TASK: Execute Feature F1_DB_INIT and F2_EMBED_FALLBACK to build out config.py and database.py.

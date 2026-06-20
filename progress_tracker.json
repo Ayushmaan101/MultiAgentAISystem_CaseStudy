@@ -1,0 +1,52 @@
+{
+  "project_name": "ai_research_assistant",
+  "current_phase": "Phase 1: Baseline Architecture",
+  "tech_stack": {
+    "orchestration": "Agno Agent OS (FastAPI Backend)",
+    "llm_gateway": "OpenRouter (Llama 3.3 70B / DeepSeek V3)",
+    "vector_database": "DuckDB with vss extension (and pure SQL cosine fallback)",
+    "embeddings": "Local BAAI/bge-small-en-v1.5 via sentence-transformers",
+    "tools": ["Tavily Search API", "asteval Safe Calculator", "Local Document Lookup RAG"]
+  },
+  "features": [
+    {
+      "id": "F1_DB_INIT",
+      "category": "Database",
+      "description": "Initialize local persistent DuckDB at ./db/embeddings.db with loaded vss extension schema.",
+      "steps": [
+        "Create db/ directory",
+        "Verify DuckDB connection",
+        "Execute schema creation for table 'document_chunks' with correct metadata columns"
+      ],
+      "status": "NOT_STARTED"
+    },
+    {
+      "id": "F2_EMBED_FALLBACK",
+      "category": "Database",
+      "description": "Setup local bge-small-en-v1.5 embedding generator and write robust pure SQL cosine fallback script.",
+      "steps": [
+        "Load local sentence-transformers model",
+        "Write vector search function using vss index matching",
+        "Implement try/except catch block translating query to pure SQL math if vss driver fails"
+      ],
+      "status": "NOT_STARTED"
+    },
+    {
+      "id": "F3_RECURSIVE_INGEST",
+      "category": "Ingestion",
+      "description": "Implement structural/recursive chunker splitting on Markdown headers (#) or double newlines.",
+      "steps": [
+        "Create documents/ directory",
+        "Implement file type parsing (.pdf, .md, .txt)",
+        "Process files, extract clean paragraph context, batch generate embeddings, and upsert to DuckDB"
+      ],
+      "status": "NOT_STARTED"
+    }
+  ],
+  "constraints": [
+    "DO NOT attempt to multi-task. Complete one Feature ID at a time.",
+    "DO NOT proceed to Agno orchestration until all Phase 1 Database/Ingestion features are marked COMPLETED and verified.",
+    "DO NOT alter the core tech stack, introduce containerization, or modify the target deliverables.",
+    "Every code generation session must begin by reading this file and the git log."
+  ]
+}
