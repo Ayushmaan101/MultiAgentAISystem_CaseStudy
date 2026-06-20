@@ -3,14 +3,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import httpx
 from agno.agent import Agent
-from agno.models.groq import Groq
 from asteval import Interpreter
 
 import config
-
-_http_client = httpx.Client(verify=False)
+from llm_client import get_model
 
 _aeval = Interpreter()
 
@@ -27,11 +24,7 @@ def safe_calculate(expression: str) -> dict:
 
 calculator_agent = Agent(
     name="Calculator Agent",
-    model=Groq(
-        id=config.GROQ_MODEL,
-        api_key=config.GROQ_API_KEY,
-        http_client=_http_client,
-    ),
+    model=get_model(),
     tools=[safe_calculate],
     instructions=[
         "You are a mathematical computation assistant.",

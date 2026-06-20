@@ -3,14 +3,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import httpx
 from agno.agent import Agent
-from agno.models.groq import Groq
 
 import config
 import database
-
-_http_client = httpx.Client(verify=False)
+from llm_client import get_model
 
 
 def document_lookup(query: str) -> dict:
@@ -32,11 +29,7 @@ def document_lookup(query: str) -> dict:
 
 rag_agent = Agent(
     name="RAG Agent",
-    model=Groq(
-        id=config.GROQ_MODEL,
-        api_key=config.GROQ_API_KEY,
-        http_client=_http_client,
-    ),
+    model=get_model(),
     tools=[document_lookup],
     instructions=[
         "You are a document retrieval assistant.",

@@ -3,14 +3,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import httpx
 from agno.agent import Agent
-from agno.models.groq import Groq
 from tavily import TavilyClient
 
 import config
-
-_http_client = httpx.Client(verify=False)
+from llm_client import get_model
 
 
 def web_search(query: str) -> dict:
@@ -33,11 +30,7 @@ def web_search(query: str) -> dict:
 
 web_search_agent = Agent(
     name="Web Search Agent",
-    model=Groq(
-        id=config.GROQ_MODEL,
-        api_key=config.GROQ_API_KEY,
-        http_client=_http_client,
-    ),
+    model=get_model(),
     tools=[web_search],
     instructions=[
         "You are a web research assistant.",
