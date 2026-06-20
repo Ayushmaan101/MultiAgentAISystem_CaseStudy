@@ -40,7 +40,7 @@
         "Implement file type parsing (.pdf, .md, .txt)",
         "Process files, extract clean paragraph context, batch generate embeddings, and upsert to DuckDB"
       ],
-      "status": "NOT_STARTED"
+      "status": "COMPLETED"
     }
   ],
   "constraints": [

@@ -1,0 +1,13 @@
+Project Delphi — AI Research Assistant Overview
+
+Project Delphi is a multi-agent AI research assistant designed to help knowledge workers quickly retrieve, synthesize, and reason over large document collections.
+
+The system combines local semantic search powered by DuckDB with a vector store of document embeddings, open-source large language models accessed via OpenRouter, and a set of specialized Agno agents that handle different task types.
+
+Core components include a document ingestion pipeline that parses PDF, Markdown, and plain-text files, splits them into semantically coherent chunks, and stores each chunk alongside its embedding in a persistent DuckDB database.
+
+At query time, the Coordinator Agent receives a user question and decides which downstream agents to invoke: the RAG Agent performs vector similarity search to surface relevant document passages, the Calculator Agent evaluates any arithmetic or scientific expressions using a safe evaluator, and the Web Search Agent calls the Tavily API to fetch up-to-date information from the internet.
+
+The system is designed to be fully local where possible, relying on BAAI/bge-small-en-v1.5 for embeddings and using an HNSW index in DuckDB for fast approximate nearest-neighbour search. A pure SQL cosine similarity fallback ensures the system continues to operate even if the VSS extension is unavailable.
+
+This document is a test fixture for the ingestion pipeline. It exercises the plain-text parser, validates chunk boundary detection on double-newline paragraph splits, and confirms that all metadata columns are correctly populated in the document_chunks table.

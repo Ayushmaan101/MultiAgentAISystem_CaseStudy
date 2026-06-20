@@ -1,9 +1,12 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: F1_DB_INIT and F2_EMBED_FALLBACK COMPLETED and verified.
+CURRENT STATE: Phase 1 Database and Ingestion features F1, F2, F3 all COMPLETED and verified.
   - config.py: all env vars and constants loaded via python-dotenv.
-  - database.py: DuckDB initialized at ./db/embeddings.db (536 KB on disk). VSS extension loaded.
+  - database.py: DuckDB initialized at ./db/embeddings.db. VSS extension loaded.
     HNSW index created (hnsw_enable_experimental_persistence=true). document_chunks table schema in place.
     generate_embedding() verified at 384 dims. search_chunks() has VSS primary path + list_cosine_similarity
     fallback + manual LIST_DOT_PRODUCT last-resort fallback.
-NEXT IMMEDIATE TASK: Execute Feature F3_RECURSIVE_INGEST — build ingestion.py with structural/recursive
-  chunker, file type parsers (.pdf, .md, .txt, .docx), batch embedding, and DuckDB upsert.
+  - ingest.py: structural/recursive chunker (headers > double-newlines > single-newlines > char limit).
+    File parsers for .pdf (pypdf), .md (raw text), .txt (raw text). CHUNK_OVERLAP context prepended per chunk.
+    MD5-based chunk IDs, INSERT OR REPLACE upsert to document_chunks. ingest_directory() verified:
+    architecture.md -> 6 chunks, overview.txt -> 7 chunks. DuckDB sanity check confirmed 5 rows present.
+NEXT IMMEDIATE TASK: Build the three Agno agents — Coordinator, RAG Agent, Calculator Agent, Web Search Agent.
