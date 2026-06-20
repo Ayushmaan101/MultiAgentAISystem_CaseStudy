@@ -3,11 +3,14 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import httpx
 from agno.agent import Agent
 from agno.models.openai.like import OpenAILike
 from asteval import Interpreter
 
 import config
+
+_http_client = httpx.Client(verify=False)
 
 _aeval = Interpreter()
 
@@ -28,6 +31,7 @@ calculator_agent = Agent(
         id=config.LLM_MODEL,
         api_key=config.OPENROUTER_API_KEY,
         base_url=config.OPENROUTER_BASE_URL,
+        http_client=_http_client,
     ),
     tools=[safe_calculate],
     instructions=[

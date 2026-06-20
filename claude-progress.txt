@@ -1,20 +1,19 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: All four agents built and syntax-verified. Coordinator, RAG, Calculator, Web Search agents complete.
+CURRENT STATE: main.py built. FastAPI server running. All three terminal tests passed.
   - config.py: all env vars and constants loaded via python-dotenv.
-  - database.py: DuckDB initialized at ./db/embeddings.db. VSS extension loaded.
-    HNSW index created (hnsw_enable_experimental_persistence=true). document_chunks table schema in place.
-    generate_embedding() verified at 384 dims. search_chunks() has VSS primary path + list_cosine_similarity
-    fallback + manual LIST_DOT_PRODUCT last-resort fallback.
-  - ingest.py: structural/recursive chunker (headers > double-newlines > single-newlines > char limit).
-    File parsers for .pdf (pypdf), .md (raw text), .txt (raw text). CHUNK_OVERLAP context prepended per chunk.
-    MD5-based chunk IDs, INSERT OR REPLACE upsert to document_chunks. ingest_directory() verified.
-  - agents/rag_agent.py: Agno Agent using document_lookup() tool -> search_chunks() from database.py.
-    System prompt enforces always calling tool before answering; shows retrieved context in response.
-  - agents/calculator_agent.py: Agno Agent using safe_calculate() tool -> asteval Interpreter.
-    Never uses Python eval(). Returns expression + result or error message.
-  - agents/web_search_agent.py: Agno Agent using web_search() tool -> TavilyClient (top 3 results).
-    Returns title, url, content snippet per result. Source citation enforced in system prompt.
-  - agents/coordinator.py: Agno Coordinator with three routing tools (_route_to_rag, _route_to_calculator,
-    _route_to_web_search). Routes by intent: docs -> RAG, math -> Calculator, external -> Web Search.
-    Uses OpenRouter (LLM_MODEL from config) via OpenAILike backend.
-NEXT IMMEDIATE TASK: Build main.py FastAPI entry point and run end-to-end terminal test.
+  - database.py: DuckDB initialized at ./db/embeddings.db. VSS + HNSW index ready.
+    generate_embedding() at 384 dims. search_chunks() with VSS + two SQL cosine fallbacks.
+  - ingest.py: structural/recursive chunker verified (architecture.md 6 chunks, overview.txt 7 chunks).
+  - agents/rag_agent.py: document_lookup() -> search_chunks(). SSL bypass via httpx.Client(verify=False).
+  - agents/calculator_agent.py: safe_calculate() -> asteval.Interpreter. Never uses eval().
+  - agents/web_search_agent.py: web_search() -> TavilyClient (top 3 results, title/url/content).
+  - agents/coordinator.py: routes by intent to _route_to_rag / _route_to_calculator / _route_to_web_search.
+    All agents use OpenAILike(http_client=httpx.Client(verify=False)) for corporate SSL proxy bypass.
+  - main.py: FastAPI app with lifespan startup (init_db), POST /query, GET /health, GET /chunks.
+    routed_to detection via RunOutput.tools[*].tool_name -> human-readable agent label.
+  TEST RESULTS (server on :8000):
+    TEST 1 /health: {"status":"ok","message":"AI Research Assistant is running"} PASS
+    TEST 2 /query calculator: routed_to="Calculator Agent" PASS (routing correct)
+    TEST 3 /query RAG: routed_to="RAG Agent" PASS (routing correct)
+  NOTE: Corporate SSL proxy required httpx.Client(verify=False) on all OpenAILike model instances.
+NEXT IMMEDIATE TASK: Agno UI integration and final Phase 1 verification.

@@ -3,10 +3,13 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import httpx
 from agno.agent import Agent
 from agno.models.openai.like import OpenAILike
 
 import config
+
+_http_client = httpx.Client(verify=False)
 from agents.rag_agent import rag_agent
 from agents.calculator_agent import calculator_agent
 from agents.web_search_agent import web_search_agent
@@ -36,6 +39,7 @@ coordinator = Agent(
         id=config.LLM_MODEL,
         api_key=config.OPENROUTER_API_KEY,
         base_url=config.OPENROUTER_BASE_URL,
+        http_client=_http_client,
     ),
     tools=[_route_to_rag, _route_to_calculator, _route_to_web_search],
     instructions=[

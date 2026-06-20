@@ -3,11 +3,14 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import httpx
 from agno.agent import Agent
 from agno.models.openai.like import OpenAILike
 
 import config
 import database
+
+_http_client = httpx.Client(verify=False)
 
 
 def document_lookup(query: str) -> dict:
@@ -33,6 +36,7 @@ rag_agent = Agent(
         id=config.LLM_MODEL,
         api_key=config.OPENROUTER_API_KEY,
         base_url=config.OPENROUTER_BASE_URL,
+        http_client=_http_client,
     ),
     tools=[document_lookup],
     instructions=[
