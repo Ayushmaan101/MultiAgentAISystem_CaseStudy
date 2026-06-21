@@ -10,6 +10,7 @@ import config
 import database
 from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
+from agents.query_rewriter import rewrite_query
 
 # Shared sync httpx client for Node 5 Groq synthesis call (SSL bypass)
 _http = httpx.Client(verify=False, timeout=30.0)
@@ -131,87 +132,9 @@ def _similarity_check(query: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — rewrite
-# Single job: rewrite query for the target tool (Ollama phi3.5, already hot)
+# NODE 3 — rewrite  (delegated to agents/query_rewriter.py)
+# rewrite_query(query, classification) imported above
 # ═══════════════════════════════════════════════════════════════════════════════
-
-_NODE3_SYSTEMS = {
-    "CALCULATOR": """You are a mathematical expression extractor.
-Your ONLY job is to convert the user's question into a clean math
-expression that Python's asteval can evaluate directly.
-Output ONLY the expression. No explanation. No text. Just the expression.
-
-Rules:
-- Convert word numbers to digits
-- Use standard operators: + - * / ** sqrt()
-- dozen = 12, percent = /100, half = /2, quarter = /4
-
-Examples:
-'three dozen eggs use half' → (3 * 12) / 2
-'15 percent of 240' → 0.15 * 240
-'square root of 256' → sqrt(256)
-'two dozen plus fifteen' → (2 * 12) + 15""",
-
-    "RAG": """You are a search query optimizer.
-Your ONLY job is to convert the user's question into a clean
-keyword search query for a vector database.
-Output ONLY the search query. No explanation. No text.
-Remove conversational filler. Keep domain-specific terms.
-
-Examples:
-'tell me about the architecture' → system architecture components design
-'what embedding model is used' → embedding model vector generation
-'summarize the retrieval pipeline' → retrieval pipeline components stages
-'what was said about chunking' → chunking strategy text splitting method""",
-
-    "SEARCH": """You are a web search query optimizer.
-Your ONLY job is to convert the user's question into a clean
-factual search query for web search.
-Output ONLY the search query. No explanation. No text.
-
-Examples:
-'when was eiffel tower built' → Eiffel Tower construction date
-'who invented the internet' → who invented the internet
-'current CEO of OpenAI' → OpenAI CEO 2025""",
-}
-
-
-def _rewrite(query: str, classification: str) -> str:
-    """
-    Node 3 — Rewrite query for the target tool via Ollama phi3.5.
-    Model is already hot from Node 1 (keep_alive=5m).
-    Single job: return the rewritten query string only.
-    """
-    system = _NODE3_SYSTEMS.get(classification, _NODE3_SYSTEMS["RAG"])
-    try:
-        resp = httpx.post(
-            f"{config.OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": config.OLLAMA_ROUTING_MODEL,
-                "prompt": f"Convert this query: {query}",
-                "keep_alive": config.OLLAMA_KEEP_ALIVE,
-                "stream": False,
-                "system": system,
-            },
-            timeout=20.0,
-            verify=False,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("response", "").strip()
-        # Strip chain-of-thought blocks
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        # Take first non-empty line only
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
-        first_line = lines[0] if lines else query
-        # Strip leading arrows or punctuation sometimes prepended by the model
-        first_line = re.sub(r"^[→\->\s'\"]+", "", first_line).strip()
-        result = first_line if first_line else query
-        print(f"[Node 3] Rewritten query: {result}")
-        return result
-    except Exception as exc:
-        print(f"[Node 3] Rewrite failed ({exc}), using original query")
-        return query
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 4 — execute tool
@@ -371,8 +294,8 @@ def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
         final_answer = tool_result
         return "Multi-Agent (pending)", tool_result, final_answer, classification, rewritten_query, routing_method
 
-    # Node 3: rewrite
-    rewritten_query = _rewrite(query, classification)
+    # Node 3: rewrite (input optimisation + target-specific rewriting)
+    rewritten_query = rewrite_query(query, classification)
 
     # Node 4: execute tool
     tool_result = _execute_tool(classification, rewritten_query)
