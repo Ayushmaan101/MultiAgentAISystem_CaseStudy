@@ -8,33 +8,45 @@ Then open https://app.agno.com and point the endpoint at http://localhost:7777
 
 Architecture
 ------------
-Single coordinator Agent registered in AgentOS.
+Five agents registered in AgentOS:
+  - Coordinator       — main orchestrator, five-node pipeline
+  - RAG Agent         — document retrieval with self-evaluation
+  - Tracker Agent     — multi-tool orchestration for MULTI queries
+  - General Reasoning Agent — final synthesis over tool results
 
 The full five-node pipeline executes inside the route_query tool:
     Node 1: Ollama phi3.5 classify (keep_alive=5m)
     Node 2: Python similarity safety net (SEARCH override)
     Node 3: Ollama phi3.5 rewrite (already hot)
     Node 4: Python direct tool execution (zero LLM)
-    Node 5: qwen3-32b synthesis (Groq, httpx)
+    Node 5: General Reasoning Agent synthesis (Groq qwen3-32b)
 
 The coordinator Agent shell uses openai/gpt-oss-20b — the only Groq model
 confirmed to always emit JSON function calls without answering from memory.
 qwen3-32b is used exclusively for Node 5 synthesis (no tool calling needed).
 
 route_query returns a structured string:
-    === RAW TOOL RESULT ===     ← visible in AgentOS tools dropdown
+    === RAW TOOL RESULT ===     <- visible in AgentOS tools dropdown
     ...
-    === SYNTHESIZED ANSWER ===  ← coordinator Agent extracts and returns this
+    === SYNTHESIZED ANSWER ===  <- coordinator Agent extracts and returns this
+
+POST /query endpoint returns run_coordinator() dict directly as JSON:
+    classification, rewritten_query, routing_method,
+    raw_tool_result, final_answer, status
 """
 
 import httpx
 from openai import AsyncOpenAI as _AsyncOpenAI
+from pydantic import BaseModel
 
 from agno.agent import Agent
 from agno.models.openai.like import OpenAILike
 from agno.os.app import AgentOS
 
 from agents.coordinator import run_coordinator
+from agents.rag_agent import rag_agent
+from agents.tracker_agent import tracker_agent
+from agents.general_reasoning_agent import general_reasoning_agent
 from database import init_db
 import config
 
@@ -71,17 +83,15 @@ def route_query(query: str) -> str:
     - === RAW TOOL RESULT ===      shown in the AgentOS tools dropdown
     - === SYNTHESIZED ANSWER ===   extracted by the coordinator Agent for chat
     """
-    routed_to, raw_tool_result, final_answer, classification, rewritten_query, routing_method = (
-        run_coordinator(query)
-    )
+    result = run_coordinator(query)
     return (
-        f"[Routed to {routed_to} via {routing_method} | {classification}]\n"
-        f"Rewritten query: \"{rewritten_query}\"\n\n"
+        f"[Routed to {result['routed_to']} via {result['routing_method']} | {result['classification']}]\n"
+        f"Rewritten query: \"{result['rewritten_query']}\"\n\n"
         f"=== RAW TOOL RESULT ===\n"
-        f"{raw_tool_result}\n"
+        f"{result['raw_tool_result']}\n"
         f"=== END RAW TOOL RESULT ===\n\n"
         f"=== SYNTHESIZED ANSWER ===\n"
-        f"{final_answer}\n"
+        f"{result['final_answer']}\n"
         f"=== END SYNTHESIZED ANSWER ==="
     )
 
@@ -109,12 +119,32 @@ coordinator = Agent(
 
 agent_os = AgentOS(
     name="AI Research Assistant",
-    description="Multi-agent assistant with five-node pipeline: classify, safety-net, rewrite, execute, synthesize",
-    agents=[coordinator],
+    description=(
+        "Multi-agent assistant: Coordinator, RAG Agent, Tracker Agent, "
+        "General Reasoning Agent. Five-node pipeline: classify, safety-net, "
+        "rewrite, execute, synthesize."
+    ),
+    agents=[coordinator, rag_agent, tracker_agent, general_reasoning_agent],
     auto_provision_dbs=False,
 )
 
 app = agent_os.get_app()
+
+
+# ── Direct /query endpoint ─────────────────────────────────────────────────────
+
+class _QueryRequest(BaseModel):
+    query: str
+
+
+@app.post("/query")
+def query_endpoint(req: _QueryRequest):
+    """
+    Direct REST endpoint that returns run_coordinator() result as JSON.
+    Bypasses the AgentOS coordinator shell — calls the pipeline directly.
+    """
+    return run_coordinator(req.query)
+
 
 if __name__ == "__main__":
     agent_os.serve("app:app", reload=False)

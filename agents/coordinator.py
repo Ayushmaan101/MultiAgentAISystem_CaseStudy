@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import time
 
 import httpx
 
@@ -13,6 +14,7 @@ from agents.web_search_agent import web_search
 from agents.query_rewriter import rewrite_query
 from agents.rag_agent import rag_agent
 from agents.tracker_agent import tracker_agent
+from agents.general_reasoning_agent import general_reasoning_agent
 
 # Shared sync httpx client for Node 5 Groq synthesis call (SSL bypass)
 _http = httpx.Client(verify=False, timeout=30.0)
@@ -58,6 +60,9 @@ Examples:
 'Tell me about the architecture' → RAG
 'What are the pipeline components?' → RAG
 'What is the retrieval layer?' → RAG
+'what is the vss extension' → RAG
+'tell me about the vector similarity search extension' → RAG
+'what is the chunk overlap value' → RAG
 'three dozen eggs use half' → CALCULATOR
 '15 percent of 240' → CALCULATOR
 'square root of 256' → CALCULATOR
@@ -246,7 +251,7 @@ _ROUTED_TO = {
 }
 
 
-def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
+def run_coordinator(query: str) -> dict:
     """
     Orchestrate the five-node pipeline:
 
@@ -254,13 +259,11 @@ def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
     Node 2: similarity safety net (only when Node 1 → SEARCH)
     Node 3: rewrite (one Ollama call, model already hot)
     Node 4: direct tool execution (zero LLM)
-    Node 5: qwen3-32b synthesis (one Groq call)
+    Node 5: General Reasoning Agent synthesis (Groq qwen3-32b)
 
-    Returns
-    -------
-    tuple[str, str, str, str, str, str]
-        (routed_to, raw_tool_result, final_answer,
-         classification, rewritten_query, routing_method)
+    Returns a dict with keys:
+        routed_to, classification, rewritten_query, routing_method,
+        raw_tool_result, final_answer, status
     """
     # Node 1: classify
     classification, routing_method = _classify(query)
@@ -296,8 +299,29 @@ def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
     else:
         tool_result = _execute_tool(classification, rewritten_query)
 
-    # Node 5: synthesize
-    final_answer = _synthesize(query, classification, tool_result)
+    # Node 5: General Reasoning Agent synthesizes final answer
+    synthesis_input = (
+        f"Original query: {query}\n"
+        f"Classification: {classification}\n"
+        f"Rewritten query: {rewritten_query}\n\n"
+        f"Tool result:\n{tool_result}"
+    )
+    final_answer = tool_result
+    for _attempt in range(3):
+        _result = general_reasoning_agent.run(synthesis_input).content or ""
+        if "Rate limit reached" not in _result and "rate_limit_exceeded" not in _result:
+            final_answer = _result or tool_result
+            break
+        print(f"[Node 5] Groq rate limit, retry {_attempt + 1}/3 after 5s…")
+        time.sleep(5)
 
     routed_to = _ROUTED_TO.get(classification, "RAG Agent")
-    return routed_to, tool_result, final_answer, classification, rewritten_query, routing_method
+    return {
+        "routed_to": routed_to,
+        "classification": classification,
+        "rewritten_query": rewritten_query,
+        "routing_method": routing_method,
+        "raw_tool_result": tool_result,
+        "final_answer": final_answer,
+        "status": "success",
+    }
