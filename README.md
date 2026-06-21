@@ -1,9 +1,8 @@
 # AI Research Assistant
 
-> A multi-agent AI system featuring a five-agent architecture,
-> KB-aware intent classification, autonomous document retrieval,
-> multi-tool orchestration, and verbose reasoning — built for the
-> Delphi Consulting Generative AI Internship Case Study.
+> A multi agent AI system featuring a five agent architecture,
+> KB aware intent classification, autonomous document retrieval,
+> multi-tool orchestration, and verbose reasoning.
 
 ---
 
@@ -26,21 +25,21 @@
 
 ## 1. Overview
 
-This is a multi-agent AI Research Assistant that answers user queries
-using Retrieval-Augmented Generation, tool usage, and intelligent agent
-orchestration. The system is built around a five-agent architecture where
-each agent has a single, well-defined responsibility.
+This is a multi agent AI Research Assistant that answers user queries
+using RAG, tool usage, and intelligent agent orchestration. The system 
+is built around a five agent architecture where each agent has a single, 
+well defined responsibility.
 
-The core architectural principle is separation of concerns — reasoning
-is separated from execution. LLMs handle what they excel at: understanding
-intent, rewriting queries, evaluating retrieved content, and synthesizing
-answers. Deterministic Python handles tool dispatch, guaranteeing
-reliability and eliminating a class of non-deterministic failures
+The core architectural principle is separation of concerns, ie, reasoning
+is separated from execution to prevent LLMs from hallucinations and tool bypass. 
+LLMs handle what they excel at: understanding intent, rewriting queries, evaluating 
+retrieved content, and synthesizing answers. Deterministic Python handles tool dispatch, 
+guaranteeing reliability and eliminating a class of non deterministic failures
 encountered during development where LLMs would inconsistently format
 tool calls depending on whether they already knew the answer from
 training data.
 
-The result is a system where every component is independently testable,
+As a result we get a system where every component is independently testable,
 every decision is logged and traceable, and every failure mode has a
 documented fallback.
 
@@ -99,7 +98,7 @@ Raw chunks with similarity scores shown
 
 ## 3. Five-Node Pipeline
 
-### Node 1 — Intent Classifier (Ollama phi3.5, local)
+### Node 1 - Intent Classifier (Ollama phi3.5, local)
 
 Single job: classify query into RAG, CALCULATOR, SEARCH, or MULTI.
 
@@ -114,7 +113,7 @@ Without this, a query like "What is the chunk overlap value?" would
 be misclassified as SEARCH because it contains no document keywords.
 
 Few-shot examples: 15 examples covering edge cases including
-plain-language math ("three dozen eggs"), domain-specific queries
+plain language math ("three dozen eggs"), domain specific queries
 without keywords, and world knowledge questions.
 
 MULTI classification: detects compound queries that require more than
@@ -123,9 +122,9 @@ one tool and routes them to the Tracker Agent.
 Fallback: if Ollama is unreachable, falls back to keyword routing so
 the system never crashes.
 
-### Node 2 — Similarity Safety Net (Python, no LLM)
+### Node 2 - Similarity Safety Net (Python, no LLM)
 
-Single job: empirically verify whether the KB has relevant content
+Single job: verify whether the KB has relevant content
 before confirming a SEARCH classification.
 
 Only triggers when Node 1 classifies SEARCH.
@@ -134,15 +133,15 @@ Mechanism: runs a fast DuckDB vector similarity check on the original
 query. If the top chunk similarity score exceeds 0.25, the route is
 overridden to RAG.
 
-Why this matters: even with KB-aware prompting, ambiguous queries can
+Why this matters: even with KB aware prompting, ambiguous queries can
 slip through. This node makes the RAG vs SEARCH decision empirically
 rather than probabilistically. It directly satisfies the case study
-requirement to avoid always calling RAG with no decision logic — RAG
+requirement to avoid always calling RAG with no decision logic, hence RAG
 is only called when KB relevance is empirically confirmed.
 
 Cost: DuckDB is embedded and local, adding approximately 50ms maximum.
 
-### Node 3 — Query Rewriter (Ollama phi3.5, already hot)
+### Node 3 - Query Rewriter (Ollama phi3.5, already hot)
 
 Single job: optimise raw user input AND rewrite for the target agent
 in one atomic Ollama call.
@@ -153,7 +152,7 @@ call has near-zero additional latency.
 Input optimisation: fixes typos, removes filler words such as "umm",
 "basically", "can you", and normalises the text before rewriting.
 
-Target-specific rewriting:
+Target specific rewriting:
 - CALCULATOR: extract clean math expression for asteval
   example: "three dozen eggs use half" becomes "(3 * 12) / 2"
 - RAG: clean keyword search query for DuckDB vector search
@@ -164,13 +163,13 @@ Target-specific rewriting:
 Why separate from Node 1: compound tasks cause attention dilution in
 small models. A model asked to classify AND rewrite will sometimes
 attempt to answer the query directly. Separation guarantees reliable
-single-task output from each node.
+single task output from each node.
 
-### Node 4 — Tool Execution (Python dispatch)
+### Node 4 - Tool Execution (Python dispatch)
 
 Single job: call the correct tool with the rewritten query from Node 3.
 
-During development, Llama models on Groq non-deterministically switched
+During development, Llama models on Groq non deterministically switched
 between JSON and Hermes XML format for tool calls depending on whether
 they recognised the query from training data. Groq rejects Hermes XML,
 causing unpredictable failures that could not be resolved through
@@ -188,9 +187,9 @@ SEARCH path: calls web_search() directly with the pre-cleaned search
 query from Node 3.
 
 MULTI path: calls the Tracker Agent which has all three tools available
-and orchestrates them autonomously based on the sub-queries from Node 3.
+and orchestrates them autonomously based on the sub queries from Node 3.
 
-### Node 5 — General Reasoning Agent (Groq qwen3-32b)
+### Node 5 - General Reasoning Agent (Groq qwen3-32b)
 
 Single job: synthesize the final answer from the raw tool result only.
 
@@ -205,7 +204,7 @@ Explicit 6-step reasoning shown in the UI:
 - Step 3: Evaluate information quality and relevance
 - Step 4: Reason through the answer
 - Step 5: State the final answer clearly
-- Step 6: Cite all sources — chunk number and file for RAG,
+- Step 6: Cite all sources - chunk number and file for RAG,
   expression and result for calculator, URLs for search
 
 Why verbose reasoning: makes the system thinking transparent and
@@ -235,18 +234,18 @@ demonstrates genuine deliberate reasoning rather than opaque chaining.
 ### Why this hybrid architecture?
 
 This system uses the Brain and Workers pattern from production
-multi-agent systems.
+multi agent systems.
 
-Brain agents (LLM-powered) handle probabilistic language-driven tasks:
+Brain agents (LLM powered) handle probabilistic language driven tasks:
 understanding intent, rewriting queries, evaluating retrieved content,
 reasoning over results, and synthesizing coherent answers.
 
 Worker functions (deterministic Python) handle tasks where reliability
 and exactness matter: math evaluation, vector search, and web API calls.
 
-This separation means LLM non-determinism only affects the parts of
-the system where it is acceptable — language understanding and generation
-— not the parts where it is dangerous — tool execution and routing.
+This separation means LLM non determinism only affects the parts of
+the system where it is acceptable (language understanding and generation) and not 
+the parts where it is dangerous (tool execution and routing).
 
 ---
 
@@ -265,7 +264,7 @@ CHUNK_SIZE=500, CHUNK_OVERLAP=50 chars of context carried forward
     |
     v
 BAAI/bge-small-en-v1.5 (local, 33M params, 384 dimensions)
-Fully local — zero API cost and zero latency penalty
+Fully local - zero API cost and zero latency penalty
 Generates normalized 384-dimensional float vector per chunk
     |
     v
@@ -277,10 +276,10 @@ Schema: id, content, embedding FLOAT[384], source_file,
         file_type, chunk_index, timestamp
     |
     v
-RAG Agent — search_chunks(rewritten_query, TOP_K=5)
+RAG Agent - search_chunks(rewritten_query, TOP_K=5)
 Generates query embedding
 HNSW index search returns top-K chunks with similarity scores
-Self-evaluates: if all scores below 0.15 — retries with refined query
+Self-evaluates: if all scores below 0.15 then retries with refined query
 Returns raw chunks: content + source_file + similarity score
     |
     v
@@ -337,12 +336,12 @@ the failure mode impossible to reproduce consistently or fix through
 prompting. The same query would succeed on one run and fail on the next.
 
 Solution: Routing decisions are made by Ollama in Node 1 and Python
-in Node 4. LLMs are given only language tasks — rewriting and synthesis.
+in Node 4. LLMs are given only language tasks - rewriting and synthesis.
 This separates the reasoning concern from the execution concern and
 makes tool dispatch fully deterministic.
 
 Tradeoff: The system cannot dynamically discover new tool combinations
-at runtime. Acceptable for a fixed tool set.
+at runtime which is acceptable for our use case which has a fixed tool set.
 
 ### Decision 3: keep_alive=5m for Ollama
 
@@ -359,9 +358,9 @@ Tradeoff: Holds 2.2GB RAM for 5 minutes between requests.
 ### Decision 4: KB description in the classification prompt
 
 Problem: Without context about what the knowledge base contains,
-phi3.5 defaults domain-specific queries to SEARCH. Queries like
+phi3.5 defaults domain specific queries to SEARCH. Queries like
 "What is the chunk overlap value?" and "What are the Phase 2
-optimizations?" have no surface-level document keywords but their
+optimizations?" have no surface level document keywords but their
 answers exist in the KB.
 
 Solution: The classification prompt explicitly describes KB contents.
@@ -399,9 +398,9 @@ evaluation and final synthesis where model quality genuinely matters.
 Tradeoff: Requires Ollama installed locally. System degrades gracefully
 to keyword routing if Ollama is unreachable.
 
-### Decision 7: Structural chunking over fixed-size chunking
+### Decision 7: Structural chunking over fixed size chunking
 
-Problem: Fixed-size chunking cuts text at arbitrary character positions,
+Problem: Fixed size chunking cuts text at arbitrary character positions,
 frequently splitting sentences and paragraphs mid-thought. This produces
 semantically incoherent chunks that degrade retrieval quality.
 
@@ -417,13 +416,13 @@ coherence improves retrieval precision.
 
 Problem: Python eval() executes arbitrary code. If a user sends a
 malicious expression, eval() would execute it with full Python
-privileges — a critical security vulnerability.
+privileges, which poses a critical security vulnerability.
 
 Solution: asteval compiles expressions to an Abstract Syntax Tree and
 only permits mathematical operations. Arbitrary code execution is
 structurally impossible.
 
-Tradeoff: Does not support full Python syntax. This is intentional —
+Tradeoff: Does not support full Python syntax. This is intentional since
 the calculator should only evaluate math expressions.
 
 ---
