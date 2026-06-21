@@ -3,8 +3,11 @@
   "current_phase": "Phase 1: Baseline Architecture",
   "tech_stack": {
     "orchestration": "Agno Agent OS (FastAPI Backend) — single coordinator Agent",
-    "intent_classifier": "Ollama phi3.5 (local, http://localhost:11434) — classify AND rewrite in one call",
-    "synthesis_llm": "qwen/qwen3-32b via Groq (direct httpx, no Agno) — synthesis only",
+    "pipeline": "Five atomic nodes: Node1=Ollama phi3.5 classify (keep_alive=5m), Node2=Python similarity safety net, Node3=Ollama phi3.5 rewrite (already hot), Node4=Python direct tool execution (zero LLM), Node5=qwen3-32b synthesis (Groq httpx)",
+    "intent_classifier": "Ollama phi3.5 (local, http://localhost:11434) — classify only (Node 1), keep_alive=5m so Node 3 reuse same loaded model",
+    "similarity_safety_net": "Node 2 — Python database.search_chunks(top_k=1), overrides SEARCH to RAG if similarity > 0.25",
+    "query_rewriter": "Ollama phi3.5 (local, Node 3) — rewrite only, already hot from Node 1 keep_alive",
+    "synthesis_llm": "qwen/qwen3-32b via Groq (direct httpx, no Agno) — synthesis only (Node 5)",
     "coordinator_shell": "openai/gpt-oss-20b via Groq — reliable JSON tool calls, no Hermes XML",
     "vector_database": "DuckDB with vss extension (and pure SQL cosine fallback)",
     "embeddings": "Local BAAI/bge-small-en-v1.5 via sentence-transformers",

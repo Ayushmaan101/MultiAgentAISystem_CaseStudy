@@ -1,7 +1,6 @@
 import sys
 import os
 import re
-import json
 
 import httpx
 
@@ -12,147 +11,277 @@ import database
 from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
 
-# Shared sync httpx client (corporate proxy SSL bypass)
+# Shared sync httpx client for Node 5 Groq synthesis call (SSL bypass)
 _http = httpx.Client(verify=False, timeout=30.0)
 
 
-# ── Ollama: classify + rewrite in one call ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 1 — classify
+# Single job: classify query as RAG, CALCULATOR, or SEARCH (one word output)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-_OLLAMA_SYSTEM_PROMPT = """You are a query processor for an AI Research Assistant.
-Given a user query, you must output a JSON object with exactly two fields:
-- classification: exactly one of RAG, CALCULATOR, or SEARCH
-- rewritten_query: the query rewritten for the target agent
+_NODE1_SYSTEM = """You are a query classifier for an AI Research Assistant.
+Your ONLY job is to output exactly one word: RAG, CALCULATOR, or SEARCH.
+No explanation. No punctuation. No other text. One word only.
+
+The internal Knowledge Base contains:
+- AI system architecture documentation
+- RAG pipeline design and components
+- Agent orchestration and coordination logic
+- Embedding models and vector storage details
+- Project-specific technical implementation details
 
 Classification rules:
-- RAG: the user asks about THIS specific system, project, or uploaded documents.
-  Any question containing 'this system', 'this project', 'the architecture',
-  'the document', 'what was said', 'what does the file say', 'in the paper',
-  'used in this', or asking about internal technical details (embedding model,
-  chunking strategy, retrieval method, vector database) → RAG.
+RAG — if the query asks about anything that could exist in the internal
+      knowledge base described above. This includes technical architectures,
+      pipeline design, specific project details, implementation specifics,
+      or ANY domain-specific question about AI systems and agents.
 
-- CALCULATOR: the user wants a numeric result from a math operation.
+CALCULATOR — if the query requires computing a precise numeric result
+             from a mathematical operation, even if described in plain language.
 
-- SEARCH: the user wants general world knowledge (people, places, events,
-  history) that is NOT about this specific project or system.
+SEARCH — ONLY if the query asks about general world knowledge, current events,
+         people, places, or facts completely unrelated to AI systems and
+         agent architectures.
 
-Rewriting rules:
-- If RAG: rephrase as a concise search query. Remove conversational filler.
-  Example: 'tell me about the architecture' -> 'system architecture components and design'
-  Example: 'what was said about retrieval' -> 'retrieval pipeline design and components'
-  Example: 'what embedding model is used in this system' -> 'embedding model used in system'
-  Example: 'tell me more about the architecture' -> 'system architecture components and design'
+When in doubt between RAG and SEARCH, always choose RAG.
 
-- If CALCULATOR: extract ONLY the math expression asteval can evaluate. Convert word numbers.
-  Example: 'three dozen eggs use half' -> '(3 * 12) / 2'
-  Example: 'square root of 256' -> 'sqrt(256)'
-  Example: '15 percent of 240' -> '0.15 * 240'
-
-- If SEARCH: rephrase as a clean factual question.
-  Example: 'when was eiffel tower built' -> 'When was the Eiffel Tower constructed?'
-  Example: 'who invented internet' -> 'Who invented the internet?'
-
-Respond with ONLY valid JSON. No explanation. No markdown. No extra text.
-Example output:
-{"classification": "CALCULATOR", "rewritten_query": "(3 * 12) / 2"}"""
+Examples:
+'What embedding model is used?' → RAG
+'Tell me about the architecture' → RAG
+'What are the pipeline components?' → RAG
+'What is the evaluation criteria?' → RAG
+'three dozen eggs use half' → CALCULATOR
+'15 percent of 240' → CALCULATOR
+'square root of 256' → CALCULATOR
+'When was the Eiffel Tower built?' → SEARCH
+'Who is the current CEO of OpenAI?' → SEARCH
+'What is the capital of France?' → SEARCH"""
 
 
-def _classify_and_rewrite(query: str) -> tuple[str, str, str]:
+def _classify(query: str) -> tuple[str, str]:
     """
-    Call Ollama phi3.5 once to both classify intent and rewrite the query for
-    the target tool.
-
-    Returns (classification, rewritten_query, routing_method).
-    Falls back to (_keyword_classify, original query, 'keyword_fallback') on
-    any failure.
+    Node 1 — Call Ollama phi3.5 to classify intent.
+    Single job: return exactly one of RAG, CALCULATOR, SEARCH.
+    Returns (classification, routing_method).
     """
     try:
-        payload = {
-            "model": config.OLLAMA_ROUTING_MODEL,
-            "prompt": f"System: {_OLLAMA_SYSTEM_PROMPT}\n\nUser query: {query}\n\nJSON output:",
-            "stream": False,
-        }
         resp = httpx.post(
             f"{config.OLLAMA_BASE_URL}/api/generate",
-            json=payload,
+            json={
+                "model": config.OLLAMA_ROUTING_MODEL,
+                "prompt": f"Query: {query}",
+                "keep_alive": config.OLLAMA_KEEP_ALIVE,
+                "stream": False,
+                "system": _NODE1_SYSTEM,
+            },
             timeout=20.0,
             verify=False,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
-
-        # Strip <think>...</think> blocks (chain-of-thought models)
+        # Strip chain-of-thought blocks
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        # Strip markdown code fences
-        raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
-
-        # Try direct JSON parse first
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            # Extract the first {...} block
-            m = re.search(r"\{[^{}]+\}", raw, re.DOTALL)
-            if not m:
-                raise ValueError(f"No JSON object in Ollama response: {raw[:200]}")
-            parsed = json.loads(m.group())
-
-        classification = str(parsed.get("classification", "")).strip().upper()
-        rewritten_query = str(parsed.get("rewritten_query", query)).strip()
-
-        if classification not in ("RAG", "CALCULATOR", "SEARCH"):
-            raise ValueError(f"Invalid classification: {classification!r}")
-
-        print(f"[coordinator] Ollama classified: {classification} | Rewritten: {rewritten_query}")
-        return classification, rewritten_query, "ollama_llm"
-
+        # Extract first word and uppercase it
+        first_word = raw.split()[0].upper().rstrip(".,;:") if raw.split() else ""
+        if first_word in ("RAG", "CALCULATOR", "SEARCH"):
+            print(f"[Node 1] Classification: {first_word}")
+            return first_word, "ollama_llm"
+        # Not a valid label — default to RAG
+        print(f"[Node 1] Unexpected response '{raw[:60]}', defaulting to RAG")
+        return "RAG", "keyword_fallback"
     except Exception as exc:
-        print(f"[coordinator] Ollama classify+rewrite failed ({exc}), using keyword fallback")
-        return _keyword_classify(query), query, "keyword_fallback"
+        print(f"[Node 1] Ollama unreachable ({exc}), defaulting to RAG")
+        return "RAG", "keyword_fallback"
 
 
-# ── Keyword fallback classifier ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 2 — similarity safety net
+# Only called when Node 1 returns SEARCH.
+# Single job: check KB relevance and override to RAG if warranted.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-_MATH_RE = re.compile(
-    r"\b(calculat|comput|arithmeti|divid|multipl|percent|sqrt|logarithm|integrat|derivativ)\b"
-    r"|what\s+is\s+\d"
-    r"|\d+\s*[+\-*/]\s*\d"
-    r"|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared|dozen|remain|eggs)\b",
-    re.IGNORECASE,
-)
-_WEB_RE = re.compile(
-    r"\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026"
-    r"|invented|who\s+is|who\s+was|who\s+created|who\s+made|who\s+built|history\s+of)\b",
-    re.IGNORECASE,
-)
-
-
-def _keyword_classify(query: str) -> str:
-    """Deterministic keyword-based fallback classification."""
-    if _MATH_RE.search(query):
-        return "CALCULATOR"
-    if _WEB_RE.search(query):
-        return "SEARCH"
-    return "RAG"
-
-
-# ── qwen3-32b synthesis ────────────────────────────────────────────────────────
-
-_SYNTHESIS_SYSTEM = (
-    "You are a synthesis engine. You receive raw tool results and write "
-    "a clean, accurate, well-structured final answer for the user.\n"
-    "Rules:\n"
-    "- For RAG: cite which chunk number and source file your answer comes from\n"
-    "- For CALCULATOR: state the expression and numeric result clearly\n"
-    "- For SEARCH: cite the source URLs\n"
-    "- Never make up information not present in the tool result\n"
-    "- Be concise and direct"
-)
-
-
-def _synthesize(raw_result: str, classification: str, original_query: str) -> str:
+def _similarity_check(query: str) -> bool:
     """
-    Call qwen3-32b via the Groq OpenAI-compatible API to synthesize a final
-    answer from the raw tool result.  Uses httpx directly (no Agno overhead).
-    Falls back to returning raw_result if the API call fails.
+    Node 2 — Check whether the KB contains content relevant to this query.
+    Returns True if the top similarity score exceeds SIMILARITY_THRESHOLD,
+    indicating the query should be answered from the KB (override to RAG).
+    """
+    try:
+        results = database.search_chunks(query, top_k=1)
+        if not results:
+            print("[Node 2] No KB results → Confirmed SEARCH")
+            return False
+        score = results[0]["similarity"]
+        if score > config.SIMILARITY_THRESHOLD:
+            print(f"[Node 2] Top similarity: {score:.4f} → Override to RAG")
+            return True
+        print(f"[Node 2] Top similarity: {score:.4f} → Confirmed SEARCH")
+        return False
+    except Exception as exc:
+        print(f"[Node 2] Similarity check failed ({exc}) → Confirmed SEARCH")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 3 — rewrite
+# Single job: rewrite query for the target tool (Ollama phi3.5, already hot)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_NODE3_SYSTEMS = {
+    "CALCULATOR": """You are a mathematical expression extractor.
+Your ONLY job is to convert the user's question into a clean math
+expression that Python's asteval can evaluate directly.
+Output ONLY the expression. No explanation. No text. Just the expression.
+
+Rules:
+- Convert word numbers to digits
+- Use standard operators: + - * / ** sqrt()
+- dozen = 12, percent = /100, half = /2, quarter = /4
+
+Examples:
+'three dozen eggs use half' → (3 * 12) / 2
+'15 percent of 240' → 0.15 * 240
+'square root of 256' → sqrt(256)
+'two dozen plus fifteen' → (2 * 12) + 15""",
+
+    "RAG": """You are a search query optimizer.
+Your ONLY job is to convert the user's question into a clean
+keyword search query for a vector database.
+Output ONLY the search query. No explanation. No text.
+Remove conversational filler. Keep domain-specific terms.
+
+Examples:
+'tell me about the architecture' → system architecture components design
+'what embedding model is used' → embedding model vector generation
+'summarize the retrieval pipeline' → retrieval pipeline components stages
+'what was said about chunking' → chunking strategy text splitting method""",
+
+    "SEARCH": """You are a web search query optimizer.
+Your ONLY job is to convert the user's question into a clean
+factual search query for web search.
+Output ONLY the search query. No explanation. No text.
+
+Examples:
+'when was eiffel tower built' → Eiffel Tower construction date
+'who invented the internet' → who invented the internet
+'current CEO of OpenAI' → OpenAI CEO 2025""",
+}
+
+
+def _rewrite(query: str, classification: str) -> str:
+    """
+    Node 3 — Rewrite query for the target tool via Ollama phi3.5.
+    Model is already hot from Node 1 (keep_alive=5m).
+    Single job: return the rewritten query string only.
+    """
+    system = _NODE3_SYSTEMS.get(classification, _NODE3_SYSTEMS["RAG"])
+    try:
+        resp = httpx.post(
+            f"{config.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": config.OLLAMA_ROUTING_MODEL,
+                "prompt": f"Convert this query: {query}",
+                "keep_alive": config.OLLAMA_KEEP_ALIVE,
+                "stream": False,
+                "system": system,
+            },
+            timeout=20.0,
+            verify=False,
+        )
+        resp.raise_for_status()
+        raw = resp.json().get("response", "").strip()
+        # Strip chain-of-thought blocks
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        # Take first non-empty line only
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        first_line = lines[0] if lines else query
+        # Strip leading arrows or punctuation sometimes prepended by the model
+        first_line = re.sub(r"^[→\->\s'\"]+", "", first_line).strip()
+        result = first_line if first_line else query
+        print(f"[Node 3] Rewritten query: {result}")
+        return result
+    except Exception as exc:
+        print(f"[Node 3] Rewrite failed ({exc}), using original query")
+        return query
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 4 — execute tool
+# Pure Python. Zero LLM. Single job: call the correct tool with rewritten query.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _execute_tool(classification: str, rewritten_query: str) -> str:
+    """
+    Node 4 — Direct tool execution with no LLM involvement.
+    Calls safe_calculate / search_chunks / web_search directly.
+    """
+    if classification == "CALCULATOR":
+        try:
+            result = safe_calculate(rewritten_query)
+            print(f"[Node 4] Calculator result: {result.split(chr(10))[-1]}")
+            return result
+        except Exception as exc:
+            return f"Expression: {rewritten_query}\nError: {exc}"
+
+    if classification == "SEARCH":
+        try:
+            result = web_search(rewritten_query)
+            n = result.count("[Result ")
+            print(f"[Node 4] Web search returned {n} results")
+            return result
+        except Exception as exc:
+            return f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
+
+    # RAG (default)
+    try:
+        results = database.search_chunks(rewritten_query, config.TOP_K)
+        if not results:
+            print("[Node 4] Retrieved 0 chunks")
+            return "=== RETRIEVED CHUNKS ===\n\nNo chunks found for this query.\n\n=== END RETRIEVED CHUNKS ==="
+        lines = ["=== RETRIEVED CHUNKS ===\n"]
+        for i, r in enumerate(results, 1):
+            lines.append(
+                f"[Chunk {i}] Source: {r['source_file']} | Similarity: {r['similarity']:.6f}"
+            )
+            lines.append(f"Content: {r['content']}")
+            lines.append("")
+        lines.append("=== END RETRIEVED CHUNKS ===")
+        raw = "\n".join(lines)
+        print(
+            f"[Node 4] Retrieved {len(results)} chunks, "
+            f"top similarity: {results[0]['similarity']:.4f}"
+        )
+        return raw
+    except Exception as exc:
+        return f"=== RETRIEVED CHUNKS ===\n\nError: {exc}\n\n=== END RETRIEVED CHUNKS ==="
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 5 — synthesize
+# Single job: write the final answer from the tool result only.
+# Uses Groq qwen3-32b via direct httpx (config.QWEN_MODEL / get_synthesis_model).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_NODE5_SYSTEM = """You are a synthesis engine for an AI Research Assistant.
+Your ONLY job is to write a clean, accurate final answer based
+strictly on the tool result provided to you.
+
+Rules:
+- Use ONLY information from the tool result
+- Never add information from your own training data
+- For RAG: cite which chunk number and source file
+- For CALCULATOR: state the expression and result clearly
+- For SEARCH: cite source URLs
+- Be concise and direct
+- If tool result is empty or irrelevant, say so honestly"""
+
+
+def _synthesize(query: str, classification: str, tool_result: str) -> str:
+    """
+    Node 5 — Synthesize final answer via Groq qwen3-32b.
+    Called from coordinator.py; uses direct httpx POST to Groq API.
+    get_synthesis_model() in llm_client.py defines this model configuration.
     """
     try:
         resp = _http.post(
@@ -160,13 +289,13 @@ def _synthesize(raw_result: str, classification: str, original_query: str) -> st
             json={
                 "model": config.QWEN_MODEL,
                 "messages": [
-                    {"role": "system", "content": _SYNTHESIS_SYSTEM},
+                    {"role": "system", "content": _NODE5_SYSTEM},
                     {
                         "role": "user",
                         "content": (
-                            f"User question: {original_query}\n\n"
-                            f"Tool result:\n{raw_result}\n\n"
-                            "Write the final answer for the user."
+                            f"Original query: {query}\n\n"
+                            f"Tool result:\n{tool_result}\n\n"
+                            "Write the final answer."
                         ),
                     },
                 ],
@@ -178,68 +307,61 @@ def _synthesize(raw_result: str, classification: str, original_query: str) -> st
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
-        # Strip any <think>...</think> blocks qwen3 might prepend
+        # Strip any chain-of-thought blocks qwen3 might prepend
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        print("[Node 5] Synthesis complete")
         return content
     except Exception as exc:
-        print(f"[coordinator] qwen3-32b synthesis failed: {exc}")
-        return raw_result
+        print(f"[Node 5] Synthesis failed ({exc}), returning raw result")
+        return tool_result
 
 
-# ── Coordinator — Ollama classify+rewrite → direct tool call → synthesis ───────
+# ═══════════════════════════════════════════════════════════════════════════════
+# run_coordinator — orchestrate all five nodes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ROUTED_TO = {
+    "CALCULATOR": "Calculator Agent",
+    "SEARCH": "Web Search Agent",
+    "RAG": "RAG Agent",
+}
+
 
 def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
     """
-    Full pipeline:
-      1. Ollama phi3.5 classifies intent AND rewrites the query in one call.
-      2. Python dispatches to the correct tool function directly (no Agno Agent).
-      3. Tool result is formatted as the raw_tool_result.
-      4. qwen3-32b synthesizes a clean final_answer from raw_tool_result.
+    Orchestrate the five-node pipeline:
+
+    Node 1: classify (one Ollama call, keep_alive=5m)
+    Node 2: similarity safety net (only when Node 1 → SEARCH)
+    Node 3: rewrite (one Ollama call, model already hot)
+    Node 4: direct tool execution (zero LLM)
+    Node 5: qwen3-32b synthesis (one Groq call)
 
     Returns
     -------
     tuple[str, str, str, str, str, str]
-        (routed_to, raw_tool_result, final_answer, classification,
-         rewritten_query, routing_method)
+        (routed_to, raw_tool_result, final_answer,
+         classification, rewritten_query, routing_method)
     """
-    classification, rewritten_query, routing_method = _classify_and_rewrite(query)
+    # Node 1: classify
+    classification, routing_method = _classify(query)
 
-    # ── CALCULATOR ──────────────────────────────────────────────────────────────
-    if classification == "CALCULATOR":
-        try:
-            raw = safe_calculate(rewritten_query)
-        except Exception as exc:
-            raw = f"Expression: {rewritten_query}\nError: {exc}"
-        routed_to = "Calculator Agent"
+    # Node 2: similarity safety net (only if SEARCH)
+    if classification == "SEARCH":
+        override = _similarity_check(query)
+        if override:
+            classification = "RAG"
+            routing_method = "similarity_override"
+            print("[Coordinator] SEARCH overridden to RAG by similarity check")
 
-    # ── SEARCH ──────────────────────────────────────────────────────────────────
-    elif classification == "SEARCH":
-        try:
-            raw = web_search(rewritten_query)
-        except Exception as exc:
-            raw = f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
-        routed_to = "Web Search Agent"
+    # Node 3: rewrite
+    rewritten_query = _rewrite(query, classification)
 
-    # ── RAG (default) ───────────────────────────────────────────────────────────
-    else:
-        try:
-            results = database.search_chunks(rewritten_query, config.TOP_K)
-            if not results:
-                raw = "=== RETRIEVED CHUNKS ===\n\nNo chunks found for this query.\n\n=== END RETRIEVED CHUNKS ==="
-            else:
-                lines = ["=== RETRIEVED CHUNKS ===\n"]
-                for i, r in enumerate(results, 1):
-                    lines.append(
-                        f"[Chunk {i}] Source: {r['source_file']} | Similarity: {r['similarity']:.6f}"
-                    )
-                    lines.append(f"Content: {r['content']}")
-                    lines.append("")
-                lines.append("=== END RETRIEVED CHUNKS ===")
-                raw = "\n".join(lines)
-        except Exception as exc:
-            raw = f"=== RETRIEVED CHUNKS ===\n\nError: {exc}\n\n=== END RETRIEVED CHUNKS ==="
-        routed_to = "RAG Agent"
+    # Node 4: execute tool
+    tool_result = _execute_tool(classification, rewritten_query)
 
-    final_answer = _synthesize(raw, classification, query)
+    # Node 5: synthesize
+    final_answer = _synthesize(query, classification, tool_result)
 
-    return routed_to, raw, final_answer, classification, rewritten_query, routing_method
+    routed_to = _ROUTED_TO.get(classification, "RAG Agent")
+    return routed_to, tool_result, final_answer, classification, rewritten_query, routing_method

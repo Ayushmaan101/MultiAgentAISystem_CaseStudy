@@ -1,15 +1,15 @@
 """
 LLM client factory for the AI Research Assistant.
 
-Synthesis provider: Groq (qwen/qwen3-32b) — used ONLY for final answer synthesis
-                    inside coordinator.py after tool execution.
-Primary provider  : OpenRouter (Llama 3.3 70B) — available for general use.
+Synthesis provider: Groq qwen/qwen3-32b — used exclusively by Node 5 in
+                    coordinator.py for final answer synthesis after tool
+                    execution.  No tool calling involved — pure text generation.
 
 Usage
 -----
     from llm_client import get_synthesis_model
 
-    # In coordinator Agent (app.py):
+    # Coordinator shell in app.py:
     Agent(model=get_synthesis_model(), ...)
 """
 
@@ -19,56 +19,34 @@ from agno.models.openai.like import OpenAILike
 
 import config
 
-# Sync httpx client — used by coordinator.py direct Groq API calls and Agno sync paths.
+# Sync httpx client — used by coordinator.py direct Groq API calls (Node 5).
 _http_client = httpx.Client(verify=False)
 
 # Async httpx client — shared by SDK async clients (AgentOS / uvicorn path).
 _async_http_client = httpx.AsyncClient(verify=False)
 
 
-def get_model() -> OpenAILike:
-    """
-    Return an OpenAILike model instance pointed at OpenRouter (primary LLM provider).
-
-    Passes both a sync and async httpx client so SSL verify=False works in both
-    Agno's synchronous coordinator path and the async AgentOS / uvicorn path.
-    """
-    print("[llm_client] Using OpenRouter")
-    async_client = _AsyncOpenAIClient(
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
-        http_client=_async_http_client,
-    )
-    return OpenAILike(
-        id=config.LLM_MODEL,
-        api_key=config.OPENROUTER_API_KEY,
-        base_url=config.OPENROUTER_BASE_URL,
-        http_client=_http_client,
-        async_client=async_client,
-    )
-
-
 def get_synthesis_model() -> OpenAILike:
     """
-    Return openai/gpt-oss-20b via Groq for the AgentOS coordinator shell.
+    Return qwen/qwen3-32b via Groq, used exclusively by Node 5 synthesis.
 
-    gpt-oss-20b is an OpenAI-architecture model that always emits JSON
-    function-call format — never Hermes XML — regardless of whether the model
-    knows the answer from training data.  qwen3-32b was found to answer
-    "known" queries (e.g. 15% of 240) directly without calling route_query.
+    This model is called via direct httpx in coordinator.py (not as an Agno
+    Agent tool) so tool-calling reliability is not a concern here — qwen3-32b
+    is only used for text synthesis from raw tool results.
 
-    qwen/qwen3-32b is used for synthesis via a direct httpx call inside
-    coordinator.py (_synthesize).  This function provides the coordinator
-    shell model only.
+    NOTE: The AgentOS coordinator shell in app.py uses openai/gpt-oss-20b
+    directly (hardcoded) because qwen3-32b answers 'known' queries without
+    calling tools (same Hermes XML issue as Llama models).  gpt-oss-20b is
+    the only Groq model confirmed to always emit JSON tool calls.
     """
-    print("[llm_client] Coordinator shell model (gpt-oss-20b)")
+    print("[llm_client] Synthesis model (qwen3-32b)")
     async_client = _AsyncOpenAIClient(
         api_key=config.GROQ_API_KEY,
         base_url=config.GROQ_BASE_URL,
         http_client=_async_http_client,
     )
     return OpenAILike(
-        id=config.GROQ_MODEL,
+        id=config.QWEN_MODEL,
         api_key=config.GROQ_API_KEY,
         base_url=config.GROQ_BASE_URL,
         http_client=_http_client,
