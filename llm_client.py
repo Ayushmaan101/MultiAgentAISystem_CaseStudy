@@ -18,13 +18,19 @@ Usage
 """
 
 import httpx
+from openai import AsyncOpenAI as _AsyncOpenAIClient
+from groq import AsyncGroq as _AsyncGroqClient
 from agno.models.openai.like import OpenAILike
 from agno.models.groq import Groq as GroqModel
 
 import config
 
-# Single shared httpx client with SSL verification disabled for corporate proxy.
+# Sync httpx client — used by Agno's synchronous code path (coordinator fallback, direct tool calls).
 _http_client = httpx.Client(verify=False)
+
+# Async httpx client — shared by the SDK async clients below.
+# A single AsyncClient instance is safe to share across requests.
+_async_http_client = httpx.AsyncClient(verify=False)
 
 # Error substrings that indicate a transient provider failure worth retrying.
 _RETRYABLE_PATTERNS = (
@@ -76,14 +82,22 @@ def get_model() -> OpenAILike:
     """
     Return an OpenAILike model instance pointed at OpenRouter (primary LLM provider).
 
+    Passes both a sync and async httpx client so SSL verify=False works in both
+    Agno's synchronous coordinator path and the async AgentOS / uvicorn path.
     Logs "Using OpenRouter" to stdout so the server logs show which provider is active.
     """
     print("[llm_client] Using OpenRouter")
+    async_client = _AsyncOpenAIClient(
+        api_key=config.OPENROUTER_API_KEY,
+        base_url=config.OPENROUTER_BASE_URL,
+        http_client=_async_http_client,
+    )
     return OpenAILike(
         id=config.LLM_MODEL,
         api_key=config.OPENROUTER_API_KEY,
         base_url=config.OPENROUTER_BASE_URL,
         http_client=_http_client,
+        async_client=async_client,
     )
 
 
@@ -98,8 +112,13 @@ def get_fallback_model() -> GroqModel:
     Logs "Falling back to Groq" to stdout.
     """
     print("[llm_client] Falling back to Groq")
+    async_client = _AsyncGroqClient(
+        api_key=config.GROQ_API_KEY,
+        http_client=_async_http_client,
+    )
     return GroqModel(
         id=config.GROQ_MODEL,
         api_key=config.GROQ_API_KEY,
         http_client=_http_client,
+        async_client=async_client,
     )

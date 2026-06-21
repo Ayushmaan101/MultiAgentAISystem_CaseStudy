@@ -42,6 +42,18 @@
         "Process files, extract clean paragraph context, batch generate embeddings, and upsert to DuckDB"
       ],
       "status": "COMPLETED"
+    },
+    {
+      "id": "F4_AGNO_UI",
+      "category": "UI",
+      "description": "Integrate Agno UI via AgentOS so all four agents are accessible through app.agno.com.",
+      "steps": [
+        "Create app.py using AgentOS (agno.playground.Playground does not exist in v2.6.18)",
+        "Fix async SSL bypass: pass AsyncOpenAI/AsyncGroq clients with httpx.AsyncClient(verify=False)",
+        "Register Coordinator, RAG Agent, Calculator Agent, Web Search Agent on port 7777",
+        "Verify all four UI tests pass via AgentOS REST API"
+      ],
+      "status": "COMPLETED"
     }
   ],
   "constraints": [
