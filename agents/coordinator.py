@@ -1,93 +1,126 @@
 import sys
 import os
 import re
+import json
 
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import config
-from agents.rag_agent import rag_agent
-from agents.calculator_agent import calculator_agent
-from agents.web_search_agent import web_search_agent
+import database
+from agents.calculator_agent import safe_calculate
+from agents.web_search_agent import web_search
 
-# ── Ollama intent classifier ───────────────────────────────────────────────────
-
-_OLLAMA_SYSTEM_PROMPT = """You are a query router for an AI Research Assistant.
-Classify the user query into exactly one of three categories based on
-what the user is ultimately trying to accomplish — not the words they use.
-
-RAG - the user wants information from uploaded documents, research papers,
-      or a private knowledge base. Summaries, explanations, or questions
-      about specific stored content.
-
-CALCULATOR - the user wants a precise numeric result from a mathematical
-             operation, even if described in plain language.
-
-SEARCH - the user wants factual information about the world, current events,
-         people, places, or general knowledge that would not exist in a
-         private document collection.
-
-Examples:
-'Who invented the internet?' → SEARCH
-'What does the document say about chunking?' → RAG
-'How much is 15% of 240?' → CALCULATOR
-'Summarize the architecture section' → RAG
-'What is the capital of France?' → SEARCH
-'Calculate compound interest on 1000 at 5% for 3 years' → CALCULATOR
-'When was the Eiffel Tower built?' → SEARCH
-'What retrieval method is described in the file?' → RAG
-'If I have three dozen eggs and use half, how many remain?' → CALCULATOR
-'Who is the current US president?' → SEARCH
-
-Respond with exactly one word: RAG, CALCULATOR, or SEARCH.
-No explanation. No punctuation. No other text whatsoever."""
+# Shared sync httpx client (corporate proxy SSL bypass)
+_http = httpx.Client(verify=False, timeout=30.0)
 
 
-def _classify_with_ollama(query: str) -> tuple[str, str]:
+# ── Ollama: classify + rewrite in one call ─────────────────────────────────────
+
+_OLLAMA_SYSTEM_PROMPT = """You are a query processor for an AI Research Assistant.
+Given a user query, you must output a JSON object with exactly two fields:
+- classification: exactly one of RAG, CALCULATOR, or SEARCH
+- rewritten_query: the query rewritten for the target agent
+
+Classification rules:
+- RAG: the user asks about THIS specific system, project, or uploaded documents.
+  Any question containing 'this system', 'this project', 'the architecture',
+  'the document', 'what was said', 'what does the file say', 'in the paper',
+  'used in this', or asking about internal technical details (embedding model,
+  chunking strategy, retrieval method, vector database) → RAG.
+
+- CALCULATOR: the user wants a numeric result from a math operation.
+
+- SEARCH: the user wants general world knowledge (people, places, events,
+  history) that is NOT about this specific project or system.
+
+Rewriting rules:
+- If RAG: rephrase as a concise search query. Remove conversational filler.
+  Example: 'tell me about the architecture' -> 'system architecture components and design'
+  Example: 'what was said about retrieval' -> 'retrieval pipeline design and components'
+  Example: 'what embedding model is used in this system' -> 'embedding model used in system'
+  Example: 'tell me more about the architecture' -> 'system architecture components and design'
+
+- If CALCULATOR: extract ONLY the math expression asteval can evaluate. Convert word numbers.
+  Example: 'three dozen eggs use half' -> '(3 * 12) / 2'
+  Example: 'square root of 256' -> 'sqrt(256)'
+  Example: '15 percent of 240' -> '0.15 * 240'
+
+- If SEARCH: rephrase as a clean factual question.
+  Example: 'when was eiffel tower built' -> 'When was the Eiffel Tower constructed?'
+  Example: 'who invented internet' -> 'Who invented the internet?'
+
+Respond with ONLY valid JSON. No explanation. No markdown. No extra text.
+Example output:
+{"classification": "CALCULATOR", "rewritten_query": "(3 * 12) / 2"}"""
+
+
+def _classify_and_rewrite(query: str) -> tuple[str, str, str]:
     """
-    Call Ollama /api/generate with phi3.5 to classify intent.
-    Returns (classification, routing_method).
-    classification is one of: RAG, CALCULATOR, SEARCH
-    routing_method is "ollama_llm" on success or "keyword_fallback" on failure.
+    Call Ollama phi3.5 once to both classify intent and rewrite the query for
+    the target tool.
+
+    Returns (classification, rewritten_query, routing_method).
+    Falls back to (_keyword_classify, original query, 'keyword_fallback') on
+    any failure.
     """
     try:
         payload = {
             "model": config.OLLAMA_ROUTING_MODEL,
-            "prompt": f"System: {_OLLAMA_SYSTEM_PROMPT}\n\nQuery: {query}",
+            "prompt": f"System: {_OLLAMA_SYSTEM_PROMPT}\n\nUser query: {query}\n\nJSON output:",
             "stream": False,
         }
         resp = httpx.post(
             f"{config.OLLAMA_BASE_URL}/api/generate",
             json=payload,
-            timeout=15.0,
+            timeout=20.0,
             verify=False,
         )
         resp.raise_for_status()
-        data = resp.json()
-        raw = data.get("response", "").strip().upper()
-        for label in ("CALCULATOR", "SEARCH", "RAG"):
-            if label in raw:
-                print(f"[coordinator] Ollama classified '{query[:60]}' => {label}")
-                return label, "ollama_llm"
-        print(f"[coordinator] Ollama returned unexpected label '{raw}', falling back to keyword routing")
-        return _keyword_classify(query), "keyword_fallback"
+        raw = resp.json().get("response", "").strip()
+
+        # Strip <think>...</think> blocks (chain-of-thought models)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        # Strip markdown code fences
+        raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
+
+        # Try direct JSON parse first
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            # Extract the first {...} block
+            m = re.search(r"\{[^{}]+\}", raw, re.DOTALL)
+            if not m:
+                raise ValueError(f"No JSON object in Ollama response: {raw[:200]}")
+            parsed = json.loads(m.group())
+
+        classification = str(parsed.get("classification", "")).strip().upper()
+        rewritten_query = str(parsed.get("rewritten_query", query)).strip()
+
+        if classification not in ("RAG", "CALCULATOR", "SEARCH"):
+            raise ValueError(f"Invalid classification: {classification!r}")
+
+        print(f"[coordinator] Ollama classified: {classification} | Rewritten: {rewritten_query}")
+        return classification, rewritten_query, "ollama_llm"
+
     except Exception as exc:
-        print(f"[coordinator] Ollama unreachable, falling back to keyword routing: {exc}")
-        return _keyword_classify(query), "keyword_fallback"
+        print(f"[coordinator] Ollama classify+rewrite failed ({exc}), using keyword fallback")
+        return _keyword_classify(query), query, "keyword_fallback"
 
 
 # ── Keyword fallback classifier ────────────────────────────────────────────────
 
 _MATH_RE = re.compile(
-    r'\b(calculat|comput|arithmeti|divid|multipl|percent|sqrt|logarithm|integrat|derivativ)\b'
-    r'|what\s+is\s+\d'
-    r'|\d+\s*[+\-*/]\s*\d'
-    r'|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared|dozen|remain|eggs)\b',
+    r"\b(calculat|comput|arithmeti|divid|multipl|percent|sqrt|logarithm|integrat|derivativ)\b"
+    r"|what\s+is\s+\d"
+    r"|\d+\s*[+\-*/]\s*\d"
+    r"|\b(sum|minus|plus|times|divided\s+by|added|subtracted|multiplied|squared|dozen|remain|eggs)\b",
     re.IGNORECASE,
 )
 _WEB_RE = re.compile(
-    r'\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026|invented|who\s+is|who\s+was|who\s+created|who\s+made|who\s+built|history\s+of)\b',
+    r"\b(current|today|latest|news|recent|live|stock|weather|price|trending|2025|2026"
+    r"|invented|who\s+is|who\s+was|who\s+created|who\s+made|who\s+built|history\s+of)\b",
     re.IGNORECASE,
 )
 
@@ -101,62 +134,112 @@ def _keyword_classify(query: str) -> str:
     return "RAG"
 
 
-# ── Response extraction ────────────────────────────────────────────────────────
+# ── qwen3-32b synthesis ────────────────────────────────────────────────────────
 
-def _response_text(run_output) -> str:
-    """Extract the best available text from a sub-agent RunResponse."""
-    content = getattr(run_output, "content", None) or ""
-    if not isinstance(content, str):
-        content = str(content)
-    has_words = any(c.isalpha() for c in content)
-    if has_words and content.strip():
-        return content
-    for t in (getattr(run_output, "tools", None) or []):
-        if not getattr(t, "tool_call_error", True) and t.result:
-            return str(t.result)
-    return content
+_SYNTHESIS_SYSTEM = (
+    "You are a synthesis engine. You receive raw tool results and write "
+    "a clean, accurate, well-structured final answer for the user.\n"
+    "Rules:\n"
+    "- For RAG: cite which chunk number and source file your answer comes from\n"
+    "- For CALCULATOR: state the expression and numeric result clearly\n"
+    "- For SEARCH: cite the source URLs\n"
+    "- Never make up information not present in the tool result\n"
+    "- Be concise and direct"
+)
 
 
-# ── Coordinator — pure Python dispatch, no LLM ────────────────────────────────
-
-def run_coordinator(query: str) -> tuple[str, str, str, str]:
+def _synthesize(raw_result: str, classification: str, original_query: str) -> str:
     """
-    Classify intent with Ollama (phi3.5) then dispatch directly to the
-    appropriate sub-agent using Python.  No coordinator LLM involved.
+    Call qwen3-32b via the Groq OpenAI-compatible API to synthesize a final
+    answer from the raw tool result.  Uses httpx directly (no Agno overhead).
+    Falls back to returning raw_result if the API call fails.
+    """
+    try:
+        resp = _http.post(
+            f"{config.GROQ_BASE_URL}/chat/completions",
+            json={
+                "model": config.QWEN_MODEL,
+                "messages": [
+                    {"role": "system", "content": _SYNTHESIS_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"User question: {original_query}\n\n"
+                            f"Tool result:\n{raw_result}\n\n"
+                            "Write the final answer for the user."
+                        ),
+                    },
+                ],
+            },
+            headers={
+                "Authorization": f"Bearer {config.GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        # Strip any <think>...</think> blocks qwen3 might prepend
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        return content
+    except Exception as exc:
+        print(f"[coordinator] qwen3-32b synthesis failed: {exc}")
+        return raw_result
 
-    Classification:
-        - Ollama /api/generate is called first with a strict system prompt
-          that returns exactly RAG, CALCULATOR, or SEARCH.
-        - If Ollama is unreachable or returns an unexpected label, keyword
-          regex is used as deterministic fallback (routing_method = "keyword_fallback").
 
-    Sub-agents (rag_agent, calculator_agent, web_search_agent) are called
-    directly via agent.run() — each agent handles its own LLM calls.
+# ── Coordinator — Ollama classify+rewrite → direct tool call → synthesis ───────
+
+def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
+    """
+    Full pipeline:
+      1. Ollama phi3.5 classifies intent AND rewrites the query in one call.
+      2. Python dispatches to the correct tool function directly (no Agno Agent).
+      3. Tool result is formatted as the raw_tool_result.
+      4. qwen3-32b synthesizes a clean final_answer from raw_tool_result.
 
     Returns
     -------
-    tuple[str, str, str, str]
-        (routed_to_label, response_text, classification, routing_method)
+    tuple[str, str, str, str, str, str]
+        (routed_to, raw_tool_result, final_answer, classification,
+         rewritten_query, routing_method)
     """
-    classification, routing_method = _classify_with_ollama(query)
+    classification, rewritten_query, routing_method = _classify_and_rewrite(query)
 
+    # ── CALCULATOR ──────────────────────────────────────────────────────────────
     if classification == "CALCULATOR":
         try:
-            result = _response_text(calculator_agent.run(query))
+            raw = safe_calculate(rewritten_query)
         except Exception as exc:
-            result = f"Calculator agent error: {exc}"
-        return "Calculator Agent", result, classification, routing_method
+            raw = f"Expression: {rewritten_query}\nError: {exc}"
+        routed_to = "Calculator Agent"
 
-    if classification == "SEARCH":
+    # ── SEARCH ──────────────────────────────────────────────────────────────────
+    elif classification == "SEARCH":
         try:
-            result = _response_text(web_search_agent.run(query))
+            raw = web_search(rewritten_query)
         except Exception as exc:
-            result = f"Web search agent error: {exc}"
-        return "Web Search Agent", result, classification, routing_method
+            raw = f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
+        routed_to = "Web Search Agent"
 
-    # Default: RAG
-    try:
-        result = _response_text(rag_agent.run(query))
-    except Exception as exc:
-        result = f"RAG agent error: {exc}"
-    return "RAG Agent", result, classification, routing_method
+    # ── RAG (default) ───────────────────────────────────────────────────────────
+    else:
+        try:
+            results = database.search_chunks(rewritten_query, config.TOP_K)
+            if not results:
+                raw = "=== RETRIEVED CHUNKS ===\n\nNo chunks found for this query.\n\n=== END RETRIEVED CHUNKS ==="
+            else:
+                lines = ["=== RETRIEVED CHUNKS ===\n"]
+                for i, r in enumerate(results, 1):
+                    lines.append(
+                        f"[Chunk {i}] Source: {r['source_file']} | Similarity: {r['similarity']:.6f}"
+                    )
+                    lines.append(f"Content: {r['content']}")
+                    lines.append("")
+                lines.append("=== END RETRIEVED CHUNKS ===")
+                raw = "\n".join(lines)
+        except Exception as exc:
+            raw = f"=== RETRIEVED CHUNKS ===\n\nError: {exc}\n\n=== END RETRIEVED CHUNKS ==="
+        routed_to = "RAG Agent"
+
+    final_answer = _synthesize(raw, classification, query)
+
+    return routed_to, raw, final_answer, classification, rewritten_query, routing_method

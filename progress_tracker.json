@@ -2,12 +2,14 @@
   "project_name": "ai_research_assistant",
   "current_phase": "Phase 1: Baseline Architecture",
   "tech_stack": {
-    "orchestration": "Agno Agent OS (FastAPI Backend)",
-    "llm_gateway": "OpenRouter (Llama 3.3 70B / DeepSeek V3)",
-    "intent_classifier": "Ollama llama3.2 (local, http://localhost:11434) with keyword-regex fallback",
+    "orchestration": "Agno Agent OS (FastAPI Backend) — single coordinator Agent",
+    "intent_classifier": "Ollama phi3.5 (local, http://localhost:11434) — classify AND rewrite in one call",
+    "synthesis_llm": "qwen/qwen3-32b via Groq (direct httpx, no Agno) — synthesis only",
+    "coordinator_shell": "openai/gpt-oss-20b via Groq — reliable JSON tool calls, no Hermes XML",
     "vector_database": "DuckDB with vss extension (and pure SQL cosine fallback)",
     "embeddings": "Local BAAI/bge-small-en-v1.5 via sentence-transformers",
-    "tools": ["Tavily Search API", "asteval Safe Calculator", "Local Document Lookup RAG"]
+    "tools": ["Tavily Search API (direct httpx)", "asteval Safe Calculator", "Local Document Lookup RAG"],
+    "sub_agents": "Pure Python functions — no Agno Agent objects in rag_agent/calculator_agent/web_search_agent"
   },
   "features": [
     {

@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Research Assistant",
-    description="Multi-agent assistant: RAG, Calculator, Web Search via Agno + OpenRouter",
+    description="Multi-agent assistant: RAG, Calculator, Web Search via Agno + Groq",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -32,11 +32,13 @@ class QueryRequest(BaseModel):
 
 class QueryResponse(BaseModel):
     query: str
+    rewritten_query: str
+    classification: str
+    routing_method: str
     routed_to: str
-    response: str
+    raw_tool_result: str
+    final_answer: str
     status: str
-    classification: str = ""
-    routing_method: str = ""
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -72,21 +74,27 @@ def get_chunks(limit: int = Query(default=10, ge=1, le=500)):
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(request: QueryRequest):
     try:
-        routed_to, content, classification, routing_method = run_coordinator(request.query)
+        routed_to, raw_tool_result, final_answer, classification, rewritten_query, routing_method = (
+            run_coordinator(request.query)
+        )
         return QueryResponse(
             query=request.query,
-            routed_to=routed_to,
-            response=content,
-            status="success",
+            rewritten_query=rewritten_query,
             classification=classification,
             routing_method=routing_method,
+            routed_to=routed_to,
+            raw_tool_result=raw_tool_result,
+            final_answer=final_answer,
+            status="success",
         )
     except Exception as exc:
         return QueryResponse(
             query=request.query,
-            routed_to="Unknown",
-            response=str(exc),
-            status="error",
+            rewritten_query="",
             classification="",
             routing_method="",
+            routed_to="Unknown",
+            raw_tool_result="",
+            final_answer=str(exc),
+            status="error",
         )

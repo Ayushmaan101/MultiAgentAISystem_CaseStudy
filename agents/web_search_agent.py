@@ -3,11 +3,9 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from agno.agent import Agent
 import httpx
 
 import config
-from llm_client import get_fallback_model
 
 # Shared sync client with SSL bypass (corporate proxy)
 _http = httpx.Client(verify=False, timeout=20.0)
@@ -36,19 +34,3 @@ def web_search(query: str) -> str:
         return "\n".join(lines)
     except Exception as exc:
         return f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
-
-
-web_search_agent = Agent(
-    name="Web Search Agent",
-    model=get_fallback_model(),
-    tools=[web_search],
-    instructions=[
-        "You are a web research assistant.",
-        "Your ONLY available tool is web_search. You have no other tools.",
-        "You MUST call web_search for every query. Do NOT answer from memory.",
-        "Step 1: Call web_search with the user's query.",
-        "Step 2: Copy the entire === WEB SEARCH RESULTS === block verbatim into your response.",
-        "Step 3: Write a synthesized answer citing the title and URL from each relevant source.",
-    ],
-    markdown=True,
-)

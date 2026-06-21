@@ -1,25 +1,48 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: Single routing layer. Ollama phi3.5 classifies, Python dispatches to sub-agents directly. Groq coordinator LLM removed. Clean architecture.
-  - agents/coordinator.py: Pure Python — no Agent/LLM. Ollama phi3.5 classifies query (CALCULATOR/SEARCH/RAG),
-    Python dispatches directly to calculator_agent.run(), web_search_agent.run(), or rag_agent.run().
-    Keyword fallback (_keyword_classify) used when Ollama unreachable.
-  - app.py: Single route_query tool wraps run_coordinator(). Coordinator Agent (openai/gpt-oss-20b) has
-    only one tool (route_query) — always calls it, returns result verbatim.
-  - All agents use openai/gpt-oss-20b (Groq). OpenAI-architecture model consistently emits JSON
-    function-call format. llama-3.3-70b-versatile and llama-3.1-8b-instant both emit Hermes XML format
-    for "known" queries (rejected by Groq validation). gpt-oss-20b never uses Hermes XML.
-  - llm_client.py: Removed get_router_model(). get_coordinator_model/get_fallback_model/get_precise_model
-    all resolve to openai/gpt-oss-20b via GROQ_COORDINATOR_MODEL/GROQ_MODEL/GROQ_PRECISE_MODEL.
-  - config.py: Removed GROQ_ROUTER_MODEL. All three model constants = openai/gpt-oss-20b.
-  TEST RESULTS (5/5 PASS — via AgentOS API, openai/gpt-oss-20b for all agents):
-    TEST 1 CALCULATOR "three dozen eggs / half": route_query called, routed to Calculator, answer=18  PASS
-    TEST 2 RAG "retrieval pipeline": route_query called, routed to RAG, chunks shown with source/score  PASS
-    TEST 3 SEARCH "Eiffel Tower built": route_query called, routed to Web Search, URLs shown  PASS
-    TEST 4 RAG "architecture": route_query called, routed to RAG, architecture.md chunks shown  PASS
-    TEST 5 CALCULATOR "sqrt(256)": route_query called, routed to Calculator, result=16.0  PASS
-  ARCHITECTURE:
-    Coordinator (gpt-oss-20b) -> route_query tool -> run_coordinator() -> Ollama classify ->
-    Python dispatch -> sub-agent (gpt-oss-20b) -> tool (document_lookup / safe_calculate / web_search)
+CURRENT STATE: Full architecture restructure complete. Ollama classifies and rewrites. Python calls tools
+  directly. qwen3-32b synthesizes only. Raw tool results in dropdown. Clean answers in chat.
+  - agents/coordinator.py: Ollama phi3.5 does TWO jobs in ONE call — classify (RAG/CALCULATOR/SEARCH)
+    AND rewrite query for the target tool. Python dispatches directly to safe_calculate() /
+    web_search() / database.search_chunks(). qwen3-32b called via direct httpx POST to Groq API for
+    final answer synthesis only. No Agno Agent inside coordinator.py at all.
+  - agents/rag_agent.py: Pure Python function document_lookup() only. No Agno Agent.
+  - agents/calculator_agent.py: Pure Python function safe_calculate() only. No Agno Agent.
+  - agents/web_search_agent.py: Pure Python function web_search() only. No Agno Agent.
+    Still uses httpx.Client(verify=False) for Tavily — NOT TavilyClient (no SSL bypass).
+  - app.py: Single coordinator Agent (gpt-oss-20b for reliable JSON tool calls) registered in AgentOS.
+    route_query tool returns structured string with === RAW TOOL RESULT === and === SYNTHESIZED ANSWER ===
+    sections. Coordinator Agent extracts and returns only SYNTHESIZED ANSWER to chat.
+    Raw tool result visible in AgentOS tools dropdown.
+  - config.py: QWEN_MODEL = "qwen/qwen3-32b" (synthesis), GROQ_MODEL = "openai/gpt-oss-20b" (shell).
+  - llm_client.py: get_synthesis_model() returns gpt-oss-20b for coordinator shell (via OpenAILike).
+    qwen3-32b synthesis done directly via httpx in coordinator.py to avoid Agno overhead.
+  - main.py: Updated QueryResponse with rewritten_query, raw_tool_result, final_answer fields.
+  KEY LESSON: qwen3-32b answers "known" queries (math facts, common knowledge) from memory without
+    calling tools — same Hermes XML problem as llama models. gpt-oss-20b is the only Groq model that
+    consistently emits JSON function calls for the coordinator shell.
+    qwen3-32b works well for synthesis (httpx call, no tool calling involved).
   NOTE: Corporate SSL proxy: Both sync and async httpx clients have verify=False. Do NOT remove.
-  NOTE: web_search uses direct httpx.Client(verify=False).post() to Tavily — NOT TavilyClient (no SSL bypass).
-NEXT IMMEDIATE TASK: Final verification and GitHub push.
+  NOTE: web_search uses direct httpx.Client(verify=False).post() to Tavily — NOT TavilyClient.
+  TEST RESULTS (5/5 PASS — AgentOS API):
+    TEST 1 CALCULATOR "three dozen eggs / half":
+      rewritten_query=(3 * 12) / 2 | raw=Expression: (3 * 12) / 2 / Result: 18.0 | answer=18 eggs  PASS
+    TEST 2 RAG "embedding model in this system":
+      rewritten_query=embedding model utilized within the current system | raw=BAAI/bge-small-en-v1.5
+      chunk from overview.txt | answer cited Chunk 2, overview.txt  PASS
+    TEST 3 SEARCH "Eiffel Tower built":
+      rewritten_query=When was the construction of the Eiffel Tower completed? | raw=3 results with URLs
+      | answer=1887-1889 with Wikipedia URL  PASS
+    TEST 4 RAG "architecture":
+      rewritten_query=system architecture components and design | raw=architecture.md chunks shown
+      | answer synthesized from Chunk 2 architecture.md  PASS
+    TEST 5 CALCULATOR "15 percent of 240":
+      rewritten_query=0.15 * 240 | raw=Expression: 0.15 * 240 / Result: 36.0 | answer=36  PASS
+  ARCHITECTURE FLOW:
+    User query
+      -> Coordinator Agent (gpt-oss-20b) calls route_query()
+        -> run_coordinator(): Ollama phi3.5 classify+rewrite (one call)
+          -> Python dispatch: safe_calculate() / web_search() / search_chunks()
+            -> qwen3-32b synthesis (httpx POST to Groq /chat/completions)
+              -> route_query returns structured string (raw + synthesized)
+                -> AgentOS: [dropdown]=raw tool result, [chat]=synthesized answer
+NEXT IMMEDIATE TASK: GitHub push and final submission.
