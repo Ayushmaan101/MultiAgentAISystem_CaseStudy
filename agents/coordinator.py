@@ -11,6 +11,7 @@ import database
 from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
 from agents.query_rewriter import rewrite_query
+from agents.rag_agent import rag_agent
 
 # Shared sync httpx client for Node 5 Groq synthesis call (SSL bypass)
 _http = httpx.Client(verify=False, timeout=30.0)
@@ -163,28 +164,14 @@ def _execute_tool(classification: str, rewritten_query: str) -> str:
         except Exception as exc:
             return f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
 
-    # RAG (default)
+    # RAG — delegate to genuine Agno Agent with self-evaluation and retry logic
     try:
-        results = database.search_chunks(rewritten_query, config.TOP_K)
-        if not results:
-            print("[Node 4] Retrieved 0 chunks")
-            return "=== RETRIEVED CHUNKS ===\n\nNo chunks found for this query.\n\n=== END RETRIEVED CHUNKS ==="
-        lines = ["=== RETRIEVED CHUNKS ===\n"]
-        for i, r in enumerate(results, 1):
-            lines.append(
-                f"[Chunk {i}] Source: {r['source_file']} | Similarity: {r['similarity']:.6f}"
-            )
-            lines.append(f"Content: {r['content']}")
-            lines.append("")
-        lines.append("=== END RETRIEVED CHUNKS ===")
-        raw = "\n".join(lines)
-        print(
-            f"[Node 4] Retrieved {len(results)} chunks, "
-            f"top similarity: {results[0]['similarity']:.4f}"
-        )
-        return raw
+        result = rag_agent.run(rewritten_query)
+        content = result.content or "No content returned from RAG Agent."
+        print(f"[Node 4] RAG Agent completed, content length: {len(content)}")
+        return content
     except Exception as exc:
-        return f"=== RETRIEVED CHUNKS ===\n\nError: {exc}\n\n=== END RETRIEVED CHUNKS ==="
+        return f"=== RETRIEVED CHUNKS ===\n\nRAG Agent error: {exc}\n\n=== END RETRIEVED CHUNKS ==="
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

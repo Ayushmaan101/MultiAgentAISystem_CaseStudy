@@ -1,3 +1,3 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: Query Rewriter created and verified. Input optimisation + target rewriting in one Ollama call. Integrated into coordinator.py. End-to-end test passing.
-NEXT IMMEDIATE TASK: Create RAG Agent as genuine Agno Agent (Prompt 9C).
+CURRENT STATE: RAG Agent created as genuine Agno Agent. document_lookup tool registered. Self-evaluation and retry logic active. Integrated into coordinator.py. End-to-end RAG test passing.
+NEXT IMMEDIATE TASK: Create Tracker Agent (Prompt 9D).
