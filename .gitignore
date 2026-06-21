@@ -4,3 +4,10 @@ __pycache__/
 db/
 venv/
 .venv/
+progress_tracker.json
+claude-progress.txt
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+*.log
