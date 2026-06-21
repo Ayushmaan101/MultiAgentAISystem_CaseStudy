@@ -10,21 +10,21 @@ import database
 from llm_client import get_model
 
 
-def document_lookup(query: str) -> dict:
+def document_lookup(query: str) -> str:
     """Search the local knowledge base for chunks relevant to the query."""
     results = database.search_chunks(query, config.TOP_K)
-    chunks = [
-        {
-            "content": r["content"],
-            "source_file": r["source_file"],
-            "similarity": r["similarity"],
-        }
-        for r in results
-    ]
-    return {
-        "query": query,
-        "Retrieved Context": chunks,
-    }
+    if not results:
+        return "=== RETRIEVED CHUNKS ===\n\nNo chunks found for this query.\n\n=== END RETRIEVED CHUNKS ==="
+
+    lines = ["=== RETRIEVED CHUNKS ===\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"[Chunk {i}]")
+        lines.append(f"Source: {r['source_file']}")
+        lines.append(f"Similarity: {r['similarity']:.6f}")
+        lines.append(f"Content: {r['content']}")
+        lines.append("")
+    lines.append("=== END RETRIEVED CHUNKS ===")
+    return "\n".join(lines)
 
 
 rag_agent = Agent(
@@ -34,7 +34,9 @@ rag_agent = Agent(
     instructions=[
         "You are a document retrieval assistant.",
         "Always call document_lookup before answering — never rely on memory.",
-        "Show each retrieved chunk (source file, similarity score, content excerpt) before giving your answer.",
+        "When you receive the tool result, copy the entire RETRIEVED CHUNKS block verbatim into your response first.",
+        "After the chunks block, write your synthesized answer.",
+        "In your answer, cite which chunk number and source file each claim comes from.",
     ],
     markdown=True,
 )

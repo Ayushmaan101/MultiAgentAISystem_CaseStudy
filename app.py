@@ -22,10 +22,22 @@ via run_coordinator().  Both paths share the same tool functions.
 from agno.agent import Agent
 from agno.os.app import AgentOS
 
-from agents.rag_agent import document_lookup
+from agents.rag_agent import document_lookup as _document_lookup
 from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
 from llm_client import get_fallback_model
+
+
+def document_lookup(query: str) -> str:
+    """Search the local knowledge base for chunks relevant to the query."""
+    return _document_lookup(query)
+
+
+# Groq llama-4-scout-17b abbreviates "document_lookup" → "lookup" when calling tools.
+# Register the same function under both names so either call succeeds.
+def lookup(query: str) -> str:
+    """Search the local knowledge base for chunks relevant to the query."""
+    return _document_lookup(query)
 from database import init_db
 
 # Initialize the local DuckDB on startup (idempotent).
@@ -77,8 +89,10 @@ rag_agent = Agent(
     tools=[document_lookup],
     instructions=[
         "You are a document retrieval assistant.",
-        "Always call document_lookup before answering — never rely on memory.",
-        "Show each retrieved chunk (source file, similarity score, content excerpt) before giving your answer.",
+        "You MUST call the document_lookup tool for every query. Do NOT answer from memory.",
+        "Step 1: Call document_lookup with the user's query.",
+        "Step 2: Copy the entire === RETRIEVED CHUNKS === block verbatim into your response.",
+        "Step 3: Write a synthesized answer citing chunk number and source file.",
     ],
     markdown=True,
 )
