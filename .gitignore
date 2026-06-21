@@ -1,4 +1,4 @@
-.env
+﻿.env
 __pycache__/
 *.pyc
 db/
@@ -10,4 +10,5 @@ claude-progress.txt
 .pytest_cache/
 dist/
 build/
+*.db
 *.log
