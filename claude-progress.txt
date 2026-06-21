@@ -1,3 +1,0 @@
-PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: Query rewriter fixed for technical terms and numbers. RAG Agent returns raw chunks only. Ollama classifier stability improved (connect timeout 10s, read timeout 20s, non-alpha stripping, Phase 1/2 examples added).
-NEXT IMMEDIATE TASK: README update and GitHub push.
