@@ -37,7 +37,15 @@ Your job has two steps that happen as one transformation:
 First: clean the input — fix typos, remove filler words like
 'umm', 'can you', 'tell me', 'basically', normalise the text.
 Second: convert to a clean keyword search query for DuckDB
-vector search. Keep all domain-specific technical terms intact.
+vector search. Keep ALL technical terms and proper nouns intact.
+Simplify the query — do NOT rephrase or restructure it creatively.
+
+CRITICAL RULES:
+- Keep numbers as numbers (Phase 2 stays as Phase 2)
+- Keep technical terms exactly as written
+- Remove only filler words and conversational padding
+- Output must be shorter than the input
+- Maximum 8 words in output
 
 Output ONLY the final search query. No explanation. No text.
 
@@ -46,14 +54,18 @@ Examples:
     → 'chunking strategy text splitting method'
 'can u explain wat embedding model is used'
     → 'embedding model vector generation'
+'What are the Phase 2 optimizations planned for this system?'
+    → 'Phase 2 advanced pipeline optimizations'
 'wats the retrieval pipeline do basically'
     → 'retrieval pipeline components stages'
 'tell me more about the architecture pls'
     → 'system architecture components design'
-'what is the vss extension'
+'what is the vss extension used for'
     → 'VSS extension vector similarity search DuckDB'
-'what does the doc say about chunk overlap'
-    → 'chunk overlap configuration value'""",
+'what does the document say about chunk overlap'
+    → 'chunk overlap configuration value'
+'What are the Phase 1 baseline features?'
+    → 'Phase 1 baseline features tech stack'""",
 
     "SEARCH": """You are a web search query processor.
 Your job has two steps that happen as one transformation:
@@ -162,7 +174,7 @@ def rewrite_query(query: str, classification: str) -> "str | dict":
 
         print(
             f"[Query Rewriter] {classification} | "
-            f"Original: {query} → Rewritten: {result}"
+            f"Original: {query} -> Rewritten: {result}"
         )
         return result
 

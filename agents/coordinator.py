@@ -63,6 +63,10 @@ Examples:
 'what is the vss extension' → RAG
 'tell me about the vector similarity search extension' → RAG
 'what is the chunk overlap value' → RAG
+'What are the Phase 2 optimizations?' → RAG
+'What are the Phase 1 baseline features?' → RAG
+'What does the document say about chunking?' → RAG
+'What are the advanced pipeline upgrades?' → RAG
 'three dozen eggs use half' → CALCULATOR
 '15 percent of 240' → CALCULATOR
 'square root of 256' → CALCULATOR
@@ -77,7 +81,7 @@ Examples:
 def _classify(query: str) -> tuple[str, str]:
     """
     Node 1 — Call Ollama phi3.5 to classify intent.
-    Single job: return exactly one of RAG, CALCULATOR, SEARCH.
+    Single job: return exactly one of RAG, CALCULATOR, SEARCH, MULTI.
     Returns (classification, routing_method).
     """
     try:
@@ -90,15 +94,16 @@ def _classify(query: str) -> tuple[str, str]:
                 "stream": False,
                 "system": _NODE1_SYSTEM,
             },
-            timeout=20.0,
+            timeout=httpx.Timeout(20.0, connect=10.0),
             verify=False,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
+        print(f"[Node 1] Raw Ollama response: {raw[:80]!r}")
         # Strip chain-of-thought blocks
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        # Extract first word and uppercase it
-        first_word = raw.split()[0].upper().rstrip(".,;:") if raw.split() else ""
+        # Extract first word, strip ALL non-alphabetic chars before validation
+        first_word = re.sub(r"[^A-Za-z]", "", raw.split()[0]).upper() if raw.split() else ""
         if first_word in ("RAG", "CALCULATOR", "SEARCH", "MULTI"):
             print(f"[Node 1] Classification: {first_word}")
             return first_word, "ollama_llm"
@@ -106,7 +111,7 @@ def _classify(query: str) -> tuple[str, str]:
         print(f"[Node 1] Unexpected response '{raw[:60]}', defaulting to RAG")
         return "RAG", "keyword_fallback"
     except Exception as exc:
-        print(f"[Node 1] Ollama unreachable ({exc}), defaulting to RAG")
+        print(f"[Node 1] Ollama error: {exc!s} — falling back to keyword routing")
         return "RAG", "keyword_fallback"
 
 
