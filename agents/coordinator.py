@@ -12,6 +12,7 @@ from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
 from agents.query_rewriter import rewrite_query
 from agents.rag_agent import rag_agent
+from agents.tracker_agent import tracker_agent
 
 # Shared sync httpx client for Node 5 Groq synthesis call (SSL bypass)
 _http = httpx.Client(verify=False, timeout=30.0)
@@ -241,6 +242,7 @@ _ROUTED_TO = {
     "CALCULATOR": "Calculator Agent",
     "SEARCH": "Web Search Agent",
     "RAG": "RAG Agent",
+    "MULTI": "Tracker Agent",
 }
 
 
@@ -273,19 +275,26 @@ def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
     elif classification == "MULTI":
         pass  # No similarity check for MULTI queries
 
-    # MULTI placeholder — tracker agent built in Prompt 9D
-    if classification == "MULTI":
-        print("[Coordinator] MULTI query detected — tracker agent pending")
-        rewritten_query = query
-        tool_result = "MULTI routing pending tracker agent implementation"
-        final_answer = tool_result
-        return "Multi-Agent (pending)", tool_result, final_answer, classification, rewritten_query, routing_method
-
     # Node 3: rewrite (input optimisation + target-specific rewriting)
     rewritten_query = rewrite_query(query, classification)
 
     # Node 4: execute tool
-    tool_result = _execute_tool(classification, rewritten_query)
+    if classification == "MULTI":
+        sub_queries = rewritten_query  # dict from query rewriter
+        print(
+            f"[Node 4] Tracker Agent handling MULTI: "
+            f"{sub_queries.get('query_1', {}).get('type')} + "
+            f"{sub_queries.get('query_2', {}).get('type')}"
+        )
+        tool_result = tracker_agent.run(
+            f"Handle this multi-part query: {query}\n"
+            f"Sub-query 1 ({sub_queries['query_1']['type']}): "
+            f"{sub_queries['query_1']['query']}\n"
+            f"Sub-query 2 ({sub_queries['query_2']['type']}): "
+            f"{sub_queries['query_2']['query']}"
+        ).content or ""
+    else:
+        tool_result = _execute_tool(classification, rewritten_query)
 
     # Node 5: synthesize
     final_answer = _synthesize(query, classification, tool_result)
