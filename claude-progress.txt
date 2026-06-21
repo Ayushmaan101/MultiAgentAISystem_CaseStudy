@@ -1,3 +1,3 @@
 PROMPT OBJECTIVE: Build Phase 1 baseline for AI Research Assistant (Project Delphi / Case Study 2).
-CURRENT STATE: Final architecture complete. Five atomic nodes. Ollama keep_alive active. KB-aware classification. Similarity safety net. qwen3-32b synthesis only. All eight tests passing.
-NEXT IMMEDIATE TASK: GitHub push and final submission.
+CURRENT STATE: Coordinator updated with MULTI classification. Four-way routing: RAG/CALCULATOR/SEARCH/MULTI verified.
+NEXT IMMEDIATE TASK: Create Query Rewriter (Prompt 9B).

@@ -21,7 +21,7 @@ _http = httpx.Client(verify=False, timeout=30.0)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _NODE1_SYSTEM = """You are a query classifier for an AI Research Assistant.
-Your ONLY job is to output exactly one word: RAG, CALCULATOR, or SEARCH.
+Your ONLY job is to output exactly one word: RAG, CALCULATOR, SEARCH, or MULTI.
 No explanation. No punctuation. No other text. One word only.
 
 The internal Knowledge Base contains:
@@ -32,17 +32,21 @@ The internal Knowledge Base contains:
 - Project-specific technical implementation details
 
 Classification rules:
-RAG — if the query asks about anything that could exist in the internal
-      knowledge base described above. This includes technical architectures,
-      pipeline design, specific project details, implementation specifics,
-      or ANY domain-specific question about AI systems and agents.
+RAG — query asks about anything in the internal knowledge base above.
+      Technical architectures, pipeline design, project details,
+      implementation specifics, any domain-specific AI system question.
 
-CALCULATOR — if the query requires computing a precise numeric result
-             from a mathematical operation, even if described in plain language.
+CALCULATOR — query requires computing a precise numeric result
+             from a mathematical operation, even in plain language.
 
-SEARCH — ONLY if the query asks about general world knowledge, current events,
-         people, places, or facts completely unrelated to AI systems and
-         agent architectures.
+SEARCH — query asks about general world knowledge, current events,
+         people, places, or facts completely unrelated to AI systems
+         and agents. ONLY choose SEARCH if clearly not in the KB.
+
+MULTI — query clearly needs MORE THAN ONE tool to answer completely.
+        Contains both a document question AND math, or RAG AND search.
+        Only use MULTI when two distinct tool types are obviously needed.
+        When in doubt about MULTI, classify as the dominant single intent.
 
 When in doubt between RAG and SEARCH, always choose RAG.
 
@@ -50,13 +54,16 @@ Examples:
 'What embedding model is used?' → RAG
 'Tell me about the architecture' → RAG
 'What are the pipeline components?' → RAG
-'What is the evaluation criteria?' → RAG
+'What is the retrieval layer?' → RAG
 'three dozen eggs use half' → CALCULATOR
 '15 percent of 240' → CALCULATOR
 'square root of 256' → CALCULATOR
 'When was the Eiffel Tower built?' → SEARCH
 'Who is the current CEO of OpenAI?' → SEARCH
-'What is the capital of France?' → SEARCH"""
+'What is the capital of France?' → SEARCH
+'What does the doc say about chunking AND what is 500/6?' → MULTI
+'Search for RAG systems and also calculate 15% of 240' → MULTI
+'What is the embedding model and who invented the internet?' → MULTI"""
 
 
 def _classify(query: str) -> tuple[str, str]:
@@ -84,7 +91,7 @@ def _classify(query: str) -> tuple[str, str]:
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         # Extract first word and uppercase it
         first_word = raw.split()[0].upper().rstrip(".,;:") if raw.split() else ""
-        if first_word in ("RAG", "CALCULATOR", "SEARCH"):
+        if first_word in ("RAG", "CALCULATOR", "SEARCH", "MULTI"):
             print(f"[Node 1] Classification: {first_word}")
             return first_word, "ollama_llm"
         # Not a valid label — default to RAG
@@ -346,13 +353,23 @@ def run_coordinator(query: str) -> tuple[str, str, str, str, str, str]:
     # Node 1: classify
     classification, routing_method = _classify(query)
 
-    # Node 2: similarity safety net (only if SEARCH)
+    # Node 2: similarity safety net (only if SEARCH, skip for MULTI)
     if classification == "SEARCH":
         override = _similarity_check(query)
         if override:
             classification = "RAG"
             routing_method = "similarity_override"
             print("[Coordinator] SEARCH overridden to RAG by similarity check")
+    elif classification == "MULTI":
+        pass  # No similarity check for MULTI queries
+
+    # MULTI placeholder — tracker agent built in Prompt 9D
+    if classification == "MULTI":
+        print("[Coordinator] MULTI query detected — tracker agent pending")
+        rewritten_query = query
+        tool_result = "MULTI routing pending tracker agent implementation"
+        final_answer = tool_result
+        return "Multi-Agent (pending)", tool_result, final_answer, classification, rewritten_query, routing_method
 
     # Node 3: rewrite
     rewritten_query = _rewrite(query, classification)
