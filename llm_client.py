@@ -101,16 +101,62 @@ def get_model() -> OpenAILike:
     )
 
 
+def get_precise_model() -> GroqModel:
+    """
+    Return a Groq model (openai/gpt-oss-20b) for RAG and Calculator agents.
+
+    OpenAI-architecture model — always emits JSON function-call format.
+    llama-3.3-70b-versatile hallucinates non-existent tools (brave_search)
+    and emits Hermes XML for queries it "knows" the answer to, both of which
+    Groq rejects at validation.  gpt-oss-20b consistently calls the
+    registered tool in JSON format.
+    Logs "Precise model (gpt-oss-20b)" to stdout.
+    """
+    print("[llm_client] Precise model (gpt-oss-20b)")
+    async_client = _AsyncGroqClient(
+        api_key=config.GROQ_API_KEY,
+        http_client=_async_http_client,
+    )
+    return GroqModel(
+        id=config.GROQ_PRECISE_MODEL,
+        api_key=config.GROQ_API_KEY,
+        http_client=_http_client,
+        async_client=async_client,
+    )
+
+
+def get_coordinator_model() -> GroqModel:
+    """
+    Return a Groq model (openai/gpt-oss-20b) for the AgentOS coordinator shell.
+
+    OpenAI-architecture model — consistently emits JSON function-call format,
+    never Hermes XML.  All other Groq/Llama models were found to use Hermes XML
+    format for tool calls on "known" queries, which Groq rejects at validation.
+    Logs "Coordinator shell model" to stdout.
+    """
+    print("[llm_client] Coordinator shell model (gpt-oss-20b)")
+    async_client = _AsyncGroqClient(
+        api_key=config.GROQ_API_KEY,
+        http_client=_async_http_client,
+    )
+    return GroqModel(
+        id=config.GROQ_COORDINATOR_MODEL,
+        api_key=config.GROQ_API_KEY,
+        http_client=_http_client,
+        async_client=async_client,
+    )
+
+
 def get_fallback_model() -> GroqModel:
     """
-    Return a Groq model for single-tool agents (RAG, Calculator, Web Search).
+    Return a Groq model instance (openai/gpt-oss-20b).
 
-    Uses llama-3.3-70b-versatile — strong instruction-following, reliable
-    single-tool calling.  llama-4-scout uses Hermes XML format for multi-tool
-    schemas, which Agno does not parse correctly.
-    Logs "Falling back to Groq" to stdout.
+    Used by the Web Search agent.  OpenAI-architecture ensures consistent
+    JSON function-call format — llama-3.3-70b-versatile was found to emit
+    Hermes XML for "known" queries (e.g. Eiffel Tower date), which Groq rejects.
+    Logs "Fallback model" to stdout.
     """
-    print("[llm_client] Falling back to Groq")
+    print("[llm_client] Fallback model (gpt-oss-20b)")
     async_client = _AsyncGroqClient(
         api_key=config.GROQ_API_KEY,
         http_client=_async_http_client,
@@ -123,23 +169,3 @@ def get_fallback_model() -> GroqModel:
     )
 
 
-def get_router_model() -> GroqModel:
-    """
-    Return a Groq model for the coordinator (multi-tool routing).
-
-    Uses llama-4-scout-17b-16e-instruct — emits JSON tool-call format that
-    Agno parses correctly when there are 3+ tools.  llama-3.3-70b-versatile
-    switches to Hermes XML format for multi-tool schemas, breaking Agno's parser.
-    Logs "Router model (Groq Scout)" to stdout.
-    """
-    print("[llm_client] Router model (Groq Scout)")
-    async_client = _AsyncGroqClient(
-        api_key=config.GROQ_API_KEY,
-        http_client=_async_http_client,
-    )
-    return GroqModel(
-        id=config.GROQ_ROUTER_MODEL,
-        api_key=config.GROQ_API_KEY,
-        http_client=_http_client,
-        async_client=async_client,
-    )

@@ -7,7 +7,7 @@ from agno.agent import Agent
 from asteval import Interpreter
 
 import config
-from llm_client import get_model
+from llm_client import get_fallback_model, get_precise_model
 
 _aeval = Interpreter()
 
@@ -24,14 +24,15 @@ def safe_calculate(expression: str) -> str:
 
 calculator_agent = Agent(
     name="Calculator Agent",
-    model=get_model(),
+    model=get_precise_model(),
     tools=[safe_calculate],
     instructions=[
         "You are a mathematical computation assistant.",
-        "You MUST call the safe_calculate tool for every math query. Do NOT compute yourself.",
-        "Step 1: Call safe_calculate with the mathematical expression.",
-        "Step 2: Copy the tool result verbatim into your response.",
-        "Step 3: State the expression and its numeric result clearly.",
+        "Your ONLY available tool is safe_calculate. You have no other tools.",
+        "You MUST call safe_calculate for every math query. Do NOT compute yourself.",
+        "Step 1: Extract the mathematical expression from the query.",
+        "Step 2: Call safe_calculate with that expression.",
+        "Step 3: Report the expression and its numeric result.",
     ],
     markdown=True,
 )

@@ -14,116 +14,58 @@ Then open https://app.agno.com and point the endpoint at http://localhost:7777
 
 Architecture note
 -----------------
-Agents here use Groq as primary model because OpenRouter free-tier is
-rate-limited.  The main.py REST API continues to use OpenRouter+fallback
-via run_coordinator().  Both paths share the same tool functions.
+Routing is single-layer: Ollama phi3.5 classifies, Python dispatches to the
+correct sub-agent directly.  There is no coordinator LLM.
+
+Sub-agents (rag_agent, calculator_agent, web_search_agent) are defined in
+agents/*.py and use llama-3.3-70b-versatile (Groq) via get_fallback_model().
+They are imported here and registered directly in AgentOS — no duplicate
+instances.
+
+The coordinator in AgentOS wraps run_coordinator() as a single Python tool.
+The only LLM call in the coordinator path is one tool-dispatch call in Agno
+(llama-3.3-70b-versatile, single-tool → always calls route_query).
 """
 
 from agno.agent import Agent
 from agno.os.app import AgentOS
 
-from agents.rag_agent import document_lookup as _document_lookup
-from agents.calculator_agent import safe_calculate
-from agents.web_search_agent import web_search
-from llm_client import get_fallback_model, get_router_model
-
-
-def document_lookup(query: str) -> str:
-    """Search the local knowledge base for chunks relevant to the query."""
-    return _document_lookup(query)
-
-
-# Groq llama-4-scout-17b abbreviates "document_lookup" → "lookup" when calling tools.
-# Register the same function under both names so either call succeeds.
-def lookup(query: str) -> str:
-    """Search the local knowledge base for chunks relevant to the query."""
-    return _document_lookup(query)
+from agents.rag_agent import rag_agent
+from agents.calculator_agent import calculator_agent
+from agents.web_search_agent import web_search_agent
+from agents.coordinator import run_coordinator
+from llm_client import get_fallback_model, get_coordinator_model
 from database import init_db
 
 # Initialize the local DuckDB on startup (idempotent).
 init_db()
 
-# ── Routing helpers used by the coordinator ────────────────────────────────────
-# These mirror the logic in coordinator.py but are defined here as simple
-# pass-through functions so the coordinator agent can call them without
-# triggering the full 3-tier fallback chain at agent-construction time.
 
-def call_rag(query: str) -> str:
-    """Look up the knowledge base and return retrieved document chunks."""
-    from agents.coordinator import route_to_rag
-    return route_to_rag(query)
+# ── Coordinator tool ───────────────────────────────────────────────────────────
+# Ollama phi3.5 classifies the query, Python dispatches to the right sub-agent.
+# The sub-agent's full response is returned verbatim.
 
+def route_query(query: str) -> str:
+    """Retrieve the answer for this query from the backend pipeline."""
+    routed_to, response, classification, routing_method = run_coordinator(query)
+    return f"[Routed to {routed_to} via {routing_method} | {classification}]\n\n{response}"
 
-def call_calculator(query: str) -> str:
-    """Evaluate a mathematical expression and return the numeric result."""
-    from agents.coordinator import route_to_calculator
-    return route_to_calculator(query)
-
-
-def call_web_search(query: str) -> str:
-    """Search the web and return the top results with citations."""
-    from agents.coordinator import route_to_web_search
-    return route_to_web_search(query)
-
-
-# ── Register all four agents ───────────────────────────────────────────────────
 
 coordinator = Agent(
     name="Coordinator",
-    model=get_router_model(),
-    tools=[call_rag, call_calculator, call_web_search],
+    model=get_coordinator_model(),
+    tools=[route_query],
     tool_call_limit=1,
     instructions=[
-        "You are a routing coordinator. ALWAYS call one of the routing tools.",
-        "  - Math/numbers/calculations => call call_calculator",
-        "  - Documents/knowledge base => call call_rag",
-        "  - Current events/web => call call_web_search",
-        "Never answer directly. Call a tool immediately.",
+        "You are a stateless dispatcher. You have no knowledge and no memory.",
+        "You CANNOT answer questions. You can ONLY call route_query to retrieve answers.",
+        "You MUST call route_query for every single query — math, facts, anything.",
+        "Step 1: Call route_query with the user query.",
+        "Step 2: Return the tool result exactly as-is.",
     ],
     markdown=True,
 )
 
-rag_agent = Agent(
-    name="RAG Agent",
-    model=get_fallback_model(),
-    tools=[document_lookup],
-    instructions=[
-        "You are a document retrieval assistant.",
-        "You MUST call the document_lookup tool for every query. Do NOT answer from memory.",
-        "Step 1: Call document_lookup with the user's query.",
-        "Step 2: Copy the entire === RETRIEVED CHUNKS === block verbatim into your response.",
-        "Step 3: Write a synthesized answer citing chunk number and source file.",
-    ],
-    markdown=True,
-)
-
-calculator_agent = Agent(
-    name="Calculator Agent",
-    model=get_fallback_model(),
-    tools=[safe_calculate],
-    instructions=[
-        "You are a mathematical computation assistant.",
-        "You MUST call the safe_calculate tool for every math query. Do NOT compute yourself.",
-        "Step 1: Call safe_calculate with the mathematical expression.",
-        "Step 2: Copy the tool result verbatim into your response.",
-        "Step 3: State the expression and its numeric result clearly.",
-    ],
-    markdown=True,
-)
-
-web_search_agent = Agent(
-    name="Web Search Agent",
-    model=get_fallback_model(),
-    tools=[web_search],
-    instructions=[
-        "You are a web research assistant.",
-        "You MUST call the web_search tool for every query. Do NOT answer from memory.",
-        "Step 1: Call web_search with the user's query.",
-        "Step 2: Copy the entire === WEB SEARCH RESULTS === block verbatim into your response.",
-        "Step 3: Write a synthesized answer citing the title and URL from each relevant source.",
-    ],
-    markdown=True,
-)
 
 # ── AgentOS app ────────────────────────────────────────────────────────────────
 

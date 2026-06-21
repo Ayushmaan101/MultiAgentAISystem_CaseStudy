@@ -1,19 +1,15 @@
 import sys
 import os
 import re
-import json
 
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from agno.agent import Agent
-
 import config
-from llm_client import get_model, get_fallback_model, _is_retryable, _is_error_response
-from agents.rag_agent import rag_agent, document_lookup
-from agents.calculator_agent import calculator_agent, safe_calculate
-from agents.web_search_agent import web_search_agent, web_search
+from agents.rag_agent import rag_agent
+from agents.calculator_agent import calculator_agent
+from agents.web_search_agent import web_search_agent
 
 # ── Ollama intent classifier ───────────────────────────────────────────────────
 
@@ -70,12 +66,10 @@ def _classify_with_ollama(query: str) -> tuple[str, str]:
         resp.raise_for_status()
         data = resp.json()
         raw = data.get("response", "").strip().upper()
-        # Accept the label even if the model padded it slightly
         for label in ("CALCULATOR", "SEARCH", "RAG"):
             if label in raw:
                 print(f"[coordinator] Ollama classified '{query[:60]}' => {label}")
                 return label, "ollama_llm"
-        # Model returned something unexpected — fall through to keyword
         print(f"[coordinator] Ollama returned unexpected label '{raw}', falling back to keyword routing")
         return _keyword_classify(query), "keyword_fallback"
     except Exception as exc:
@@ -110,7 +104,7 @@ def _keyword_classify(query: str) -> str:
 # ── Response extraction ────────────────────────────────────────────────────────
 
 def _response_text(run_output) -> str:
-    """Extract the best available text from a sub-agent RunOutput."""
+    """Extract the best available text from a sub-agent RunResponse."""
     content = getattr(run_output, "content", None) or ""
     if not isinstance(content, str):
         content = str(content)
@@ -123,101 +117,21 @@ def _response_text(run_output) -> str:
     return content
 
 
-# ── Routing functions with OpenRouter primary and Groq fallback ────────────────
+# ── Coordinator — pure Python dispatch, no LLM ────────────────────────────────
 
-def _run_with_fallback(primary_agent, query: str, fallback_tools, fallback_instructions, agent_name: str) -> str:
+def run_coordinator(query: str) -> tuple[str, str, str, str]:
     """
-    Run primary_agent (OpenRouter). On retryable or error response, retry with a
-    Groq-backed agent. If Groq also fails, call the first Python tool directly as a
-    last resort so real data is always returned.
-
-    Tier 1 -- OpenRouter LLM (primary)
-    Tier 2 -- Groq LLM (native GroqModel class; better tool-call schema handling)
-    Tier 3 -- Direct Python tool call (no LLM; guarantees a real result)
-    """
-    try:
-        text = _response_text(primary_agent.run(query))
-    except Exception as exc:
-        text = str(exc)
-
-    if _is_retryable(Exception(text)) or _is_error_response(text):
-        print(f"[llm_client] OpenRouter error for {agent_name}: {text[:120]}")
-        fb = Agent(
-            name=agent_name,
-            model=get_fallback_model(),
-            tools=fallback_tools,
-            instructions=fallback_instructions,
-            markdown=True,
-        )
-        try:
-            fb_text = _response_text(fb.run(query))
-        except Exception as exc2:
-            fb_text = str(exc2)
-
-        if _is_error_response(fb_text):
-            # Tier 3: Groq also failed -- call the Python tool directly
-            tool_fn = fallback_tools[0]
-            print(f"[llm_client] Groq fallback failed for {agent_name}, calling {tool_fn.__name__} directly")
-            return str(tool_fn(query))
-
-        return fb_text
-
-    return text
-
-
-def route_to_rag(query: str) -> str:
-    """Route to RAG Agent (OpenRouter primary, Groq fallback on retryable error)."""
-    return _run_with_fallback(
-        rag_agent, query,
-        fallback_tools=[document_lookup],
-        fallback_instructions=[
-            "You are a document retrieval assistant.",
-            "Always call document_lookup before answering.",
-            "Show each retrieved chunk before giving your answer.",
-        ],
-        agent_name="RAG Agent",
-    )
-
-
-def route_to_calculator(query: str) -> str:
-    """Route to Calculator Agent (OpenRouter primary, Groq fallback on retryable error)."""
-    return _run_with_fallback(
-        calculator_agent, query,
-        fallback_tools=[safe_calculate],
-        fallback_instructions=[
-            "You are a mathematical computation assistant.",
-            "Always call safe_calculate -- never compute yourself.",
-            "State the expression and its numeric result.",
-        ],
-        agent_name="Calculator Agent",
-    )
-
-
-def route_to_web_search(query: str) -> str:
-    """Route to Web Search Agent (OpenRouter primary, Groq fallback on retryable error)."""
-    return _run_with_fallback(
-        web_search_agent, query,
-        fallback_tools=[web_search],
-        fallback_instructions=[
-            "You are a web research assistant.",
-            "Always call web_search before answering.",
-            "Cite all sources (title and URL).",
-        ],
-        agent_name="Web Search Agent",
-    )
-
-
-def run_coordinator(query: str) -> tuple:
-    """
-    Classify intent with Ollama (phi3.5) then route to the appropriate sub-agent.
+    Classify intent with Ollama (phi3.5) then dispatch directly to the
+    appropriate sub-agent using Python.  No coordinator LLM involved.
 
     Classification:
-        - Ollama /api/generate is called first with a strict system prompt that returns
-          exactly RAG, CALCULATOR, or SEARCH.
-        - If Ollama is unreachable or returns an unexpected label, keyword regex is used
-          as a deterministic fallback (routing_method = "keyword_fallback").
+        - Ollama /api/generate is called first with a strict system prompt
+          that returns exactly RAG, CALCULATOR, or SEARCH.
+        - If Ollama is unreachable or returns an unexpected label, keyword
+          regex is used as deterministic fallback (routing_method = "keyword_fallback").
 
-    Sub-agents remain fully LLM-powered with OpenRouter primary and Groq fallback.
+    Sub-agents (rag_agent, calculator_agent, web_search_agent) are called
+    directly via agent.run() — each agent handles its own LLM calls.
 
     Returns
     -------
@@ -227,24 +141,22 @@ def run_coordinator(query: str) -> tuple:
     classification, routing_method = _classify_with_ollama(query)
 
     if classification == "CALCULATOR":
-        return "Calculator Agent", route_to_calculator(query), classification, routing_method
+        try:
+            result = _response_text(calculator_agent.run(query))
+        except Exception as exc:
+            result = f"Calculator agent error: {exc}"
+        return "Calculator Agent", result, classification, routing_method
+
     if classification == "SEARCH":
-        return "Web Search Agent", route_to_web_search(query), classification, routing_method
-    return "RAG Agent", route_to_rag(query), classification, routing_method
+        try:
+            result = _response_text(web_search_agent.run(query))
+        except Exception as exc:
+            result = f"Web search agent error: {exc}"
+        return "Web Search Agent", result, classification, routing_method
 
-
-# ── Coordinator Agent (kept for completeness; routing uses run_coordinator()) ──
-coordinator = Agent(
-    name="Coordinator",
-    model=get_model(),
-    tools=[route_to_rag, route_to_calculator, route_to_web_search],
-    tool_call_limit=1,
-    instructions=[
-        "You are a routing coordinator. ALWAYS call one of the routing tools.",
-        "  - Math/numbers/calculations => call route_to_calculator",
-        "  - Documents/knowledge base => call route_to_rag",
-        "  - Current events/web => call route_to_web_search",
-        "Never answer directly. Call a tool immediately.",
-    ],
-    markdown=True,
-)
+    # Default: RAG
+    try:
+        result = _response_text(rag_agent.run(query))
+    except Exception as exc:
+        result = f"RAG agent error: {exc}"
+    return "RAG Agent", result, classification, routing_method
