@@ -4,28 +4,38 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agno.agent import Agent
-from tavily import TavilyClient
+import httpx
 
 import config
 from llm_client import get_model
 
+# Shared sync client with SSL bypass (corporate proxy)
+_http = httpx.Client(verify=False, timeout=20.0)
 
-def web_search(query: str) -> dict:
+
+def web_search(query: str) -> str:
     """Search the web via Tavily and return the top 3 results."""
     try:
-        client = TavilyClient(api_key=config.TAVILY_API_KEY)
-        response = client.search(query, max_results=3)
-        results = [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "content": r.get("content", ""),
-            }
-            for r in response.get("results", [])
-        ]
-        return {"query": query, "results": results}
+        resp = _http.post(
+            "https://api.tavily.com/search",
+            json={"api_key": config.TAVILY_API_KEY, "query": query, "max_results": 3},
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if not results:
+            return "=== WEB SEARCH RESULTS ===\n\nNo results found for this query.\n\n=== END SEARCH RESULTS ==="
+
+        lines = ["=== WEB SEARCH RESULTS ===\n"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"[Result {i}]")
+            lines.append(f"Title: {r.get('title', '')}")
+            lines.append(f"URL: {r.get('url', '')}")
+            lines.append(f"Content: {r.get('content', '')}")
+            lines.append("")
+        lines.append("=== END SEARCH RESULTS ===")
+        return "\n".join(lines)
     except Exception as exc:
-        return {"query": query, "error": str(exc)}
+        return f"=== WEB SEARCH RESULTS ===\n\nError: {exc}\n\n=== END SEARCH RESULTS ==="
 
 
 web_search_agent = Agent(
@@ -34,9 +44,10 @@ web_search_agent = Agent(
     tools=[web_search],
     instructions=[
         "You are a web research assistant.",
-        "Always call web_search before answering any question that requires current or external information.",
-        "Never answer from memory when fresh web data is available.",
-        "Cite all sources (title and URL) in your response.",
+        "You MUST call the web_search tool for every query. Do NOT answer from memory.",
+        "Step 1: Call web_search with the user's query.",
+        "Step 2: Copy the entire === WEB SEARCH RESULTS === block verbatim into your response.",
+        "Step 3: Write a synthesized answer citing the title and URL from each relevant source.",
     ],
     markdown=True,
 )

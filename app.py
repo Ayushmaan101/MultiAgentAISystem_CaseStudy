@@ -25,7 +25,7 @@ from agno.os.app import AgentOS
 from agents.rag_agent import document_lookup as _document_lookup
 from agents.calculator_agent import safe_calculate
 from agents.web_search_agent import web_search
-from llm_client import get_fallback_model
+from llm_client import get_fallback_model, get_router_model
 
 
 def document_lookup(query: str) -> str:
@@ -70,7 +70,7 @@ def call_web_search(query: str) -> str:
 
 coordinator = Agent(
     name="Coordinator",
-    model=get_fallback_model(),
+    model=get_router_model(),
     tools=[call_rag, call_calculator, call_web_search],
     tool_call_limit=1,
     instructions=[
@@ -103,8 +103,10 @@ calculator_agent = Agent(
     tools=[safe_calculate],
     instructions=[
         "You are a mathematical computation assistant.",
-        "Always call safe_calculate for every math query — never compute yourself.",
-        "After the tool returns, clearly state the expression and its numeric result.",
+        "You MUST call the safe_calculate tool for every math query. Do NOT compute yourself.",
+        "Step 1: Call safe_calculate with the mathematical expression.",
+        "Step 2: Copy the tool result verbatim into your response.",
+        "Step 3: State the expression and its numeric result clearly.",
     ],
     markdown=True,
 )
@@ -115,9 +117,10 @@ web_search_agent = Agent(
     tools=[web_search],
     instructions=[
         "You are a web research assistant.",
-        "Always call web_search before answering any question that requires current or external information.",
-        "Never answer from memory when fresh web data is available.",
-        "Cite all sources (title and URL) in your response.",
+        "You MUST call the web_search tool for every query. Do NOT answer from memory.",
+        "Step 1: Call web_search with the user's query.",
+        "Step 2: Copy the entire === WEB SEARCH RESULTS === block verbatim into your response.",
+        "Step 3: Write a synthesized answer citing the title and URL from each relevant source.",
     ],
     markdown=True,
 )

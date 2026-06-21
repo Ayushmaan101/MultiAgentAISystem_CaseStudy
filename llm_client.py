@@ -103,12 +103,11 @@ def get_model() -> OpenAILike:
 
 def get_fallback_model() -> GroqModel:
     """
-    Return a Groq model instance using Agno's native Groq class (fallback LLM provider).
+    Return a Groq model for single-tool agents (RAG, Calculator, Web Search).
 
-    The native Groq class correctly handles the tool-call schema translation for
-    Groq-hosted models.  OpenAILike does not work reliably with Groq's function-call
-    format for all models, so we use the native class here.
-    Called only when OpenRouter raises a retryable error.
+    Uses llama-3.3-70b-versatile — strong instruction-following, reliable
+    single-tool calling.  llama-4-scout uses Hermes XML format for multi-tool
+    schemas, which Agno does not parse correctly.
     Logs "Falling back to Groq" to stdout.
     """
     print("[llm_client] Falling back to Groq")
@@ -118,6 +117,28 @@ def get_fallback_model() -> GroqModel:
     )
     return GroqModel(
         id=config.GROQ_MODEL,
+        api_key=config.GROQ_API_KEY,
+        http_client=_http_client,
+        async_client=async_client,
+    )
+
+
+def get_router_model() -> GroqModel:
+    """
+    Return a Groq model for the coordinator (multi-tool routing).
+
+    Uses llama-4-scout-17b-16e-instruct — emits JSON tool-call format that
+    Agno parses correctly when there are 3+ tools.  llama-3.3-70b-versatile
+    switches to Hermes XML format for multi-tool schemas, breaking Agno's parser.
+    Logs "Router model (Groq Scout)" to stdout.
+    """
+    print("[llm_client] Router model (Groq Scout)")
+    async_client = _AsyncGroqClient(
+        api_key=config.GROQ_API_KEY,
+        http_client=_async_http_client,
+    )
+    return GroqModel(
+        id=config.GROQ_ROUTER_MODEL,
         api_key=config.GROQ_API_KEY,
         http_client=_http_client,
         async_client=async_client,

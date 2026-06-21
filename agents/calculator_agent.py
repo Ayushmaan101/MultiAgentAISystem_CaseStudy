@@ -12,14 +12,14 @@ from llm_client import get_model
 _aeval = Interpreter()
 
 
-def safe_calculate(expression: str) -> dict:
+def safe_calculate(expression: str) -> str:
     """Safely evaluate a mathematical expression using asteval (never Python eval)."""
     _aeval.error.clear()
     result = _aeval(expression)
     if _aeval.error:
         error_msgs = "; ".join(str(e.get_error()) for e in _aeval.error)
-        return {"expression": expression, "error": error_msgs}
-    return {"expression": expression, "result": result}
+        return f"Expression: {expression}\nError: {error_msgs}"
+    return f"Expression: {expression}\nResult: {result}"
 
 
 calculator_agent = Agent(
@@ -28,8 +28,10 @@ calculator_agent = Agent(
     tools=[safe_calculate],
     instructions=[
         "You are a mathematical computation assistant.",
-        "Always call safe_calculate for every math query — never compute yourself.",
-        "After the tool returns, clearly state the expression and its numeric result.",
+        "You MUST call the safe_calculate tool for every math query. Do NOT compute yourself.",
+        "Step 1: Call safe_calculate with the mathematical expression.",
+        "Step 2: Copy the tool result verbatim into your response.",
+        "Step 3: State the expression and its numeric result clearly.",
     ],
     markdown=True,
 )
