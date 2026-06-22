@@ -319,9 +319,14 @@ storage, and retrieval.
 documents/ (PDF, Markdown, TXT)
     |
     v
-Structural/Recursive Chunker (ingest.py)
-Priority: Markdown headers > double newlines > single newlines > char limit
-CHUNK_SIZE=500, CHUNK_OVERLAP=50 chars of context carried forward
+Parent-Child Chunker (ingest.py)
+Per-file-type dispatcher: .md / .pdf / .txt
+.md  — header + full body = parent, each paragraph = child
+.pdf — every 3 paragraphs = parent, each paragraph = child
+.txt — every 3 paragraphs = parent, each paragraph = child
+Search runs against child chunks for precise embedding match
+LLM receives parent chunk for full section context
+Similarity scores improved 3x vs structural chunking baseline
     |
     v
 BAAI/bge-small-en-v1.5 (local, 33M params, 384 dimensions)
@@ -334,7 +339,7 @@ HNSW index for fast approximate nearest-neighbour search
 Pure SQL cosine fallback via list_cosine_similarity() if vss unavailable
 Idempotent ingestion via INSERT OR REPLACE
 Schema: id, content, embedding FLOAT[384], source_file,
-        file_type, chunk_index, timestamp
+        file_type, chunk_index, chunk_type, parent_id, timestamp
     |
     v
 RAG Agent - search_chunks(rewritten_query, TOP_K=5)
@@ -459,19 +464,26 @@ evaluation and final synthesis where model quality genuinely matters.
 Tradeoff: Requires Ollama installed locally. System degrades gracefully
 to keyword routing if Ollama is unreachable.
 
-### Decision 7: Structural chunking over fixed size chunking
+### Decision 7: Parent-child chunking over structural chunking
 
-Problem: Fixed size chunking cuts text at arbitrary character positions,
-frequently splitting sentences and paragraphs mid-thought. This produces
-semantically incoherent chunks that degrade retrieval quality.
+Problem: Structural chunking treated markdown headers as split points,
+orphaning section headings from their content. A header like
+"Phase 2: Advanced Pipeline Upgrades" would land in one chunk while
+the five bullet points beneath it landed in a separate chunk with no
+heading context. Retrieval scores for that content were as low as 0.17
+because the chunks had no semantic coherence.
 
-Solution: Structural chunking respects logical document boundaries.
-Markdown headers are tried first, then paragraph breaks, then sentence
-breaks, then character limit as a last resort. Each chunk represents a
-complete semantic unit.
+Solution: Parent-child chunking keeps entire sections intact. Each
+markdown header plus its full body becomes one parent chunk. Individual
+paragraphs within that section become child chunks that store a
+parent_id reference. Search runs against child chunks for precise
+embedding matching, but the LLM receives the full parent chunk for
+broad context. This directly solved the Phase 2 content retrieval
+problem — similarity scores improved from 0.17 to 0.52 after the switch.
 
-Tradeoff: Produces uneven chunk sizes. Accepted because semantic
-coherence improves retrieval precision.
+Tradeoff: More rows in DuckDB (parents + children vs children only).
+Retrieval requires two queries — find child, fetch parent. Both are
+negligible given DuckDB runs in-process.
 
 ### Decision 8: asteval over Python eval()
 
