@@ -11,11 +11,28 @@ import config
 from llm_client import get_synthesis_model
 
 
+_MAX_CTX_CHARS = 2200  # max parent context chars per chunk — captures full sections, stays under TPM
+
+
+def _context_window(parent: str, child: str, window: int = _MAX_CTX_CHARS) -> str:
+    """Return up to `window` chars of parent centered on where child appears."""
+    idx = parent.find(child[:60]) if child else -1
+    if idx == -1:
+        # Child not located in parent — return start of parent
+        return parent[:window] + ("..." if len(parent) > window else "")
+    start = max(0, idx - window // 4)
+    end = min(len(parent), idx + len(child) + (window * 3 // 4))
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(parent) else ""
+    return prefix + parent[start:end] + suffix
+
+
 @tool
 def document_lookup(query: str) -> str:
     """
     Search the internal knowledge base for relevant document chunks.
-    Returns top-K chunks with source file and similarity scores.
+    Returns top-K chunks with source file, similarity score, matched
+    paragraph, and surrounding section context.
     Always call this before answering any document question.
     """
     results = database.search_chunks(query, config.TOP_K)
@@ -24,14 +41,13 @@ def document_lookup(query: str) -> str:
         return "No relevant chunks found in the knowledge base."
 
     formatted = "=== RETRIEVED CHUNKS ===\n"
-    for i, r in enumerate(results, 1):
-        content = r["content"]
-        source = r["source_file"]
-        score = r["similarity"]
+    for i, (parent_content, source, score, child_content) in enumerate(results, 1):
+        ctx = _context_window(parent_content, child_content)
         formatted += f"\n[Chunk {i}]\n"
         formatted += f"Source: {source}\n"
         formatted += f"Similarity: {score:.6f}\n"
-        formatted += f"Content: {content}\n"
+        formatted += f"Matched paragraph: {child_content}\n"
+        formatted += f"Full section context:\n{ctx}\n"
         formatted += "-" * 40 + "\n"
     formatted += "\n=== END RETRIEVED CHUNKS ==="
     return formatted

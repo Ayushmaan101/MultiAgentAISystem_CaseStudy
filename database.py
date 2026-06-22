@@ -50,6 +50,8 @@ def init_db() -> None:
             source_file VARCHAR,
             file_type   VARCHAR,
             chunk_index INTEGER,
+            chunk_type  VARCHAR DEFAULT 'child',
+            parent_id   VARCHAR DEFAULT NULL,
             timestamp   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -81,36 +83,43 @@ def generate_embedding(text: str) -> list[float]:
 
 # ── F2_EMBED_FALLBACK parts 2 & 3 ────────────────────────────────────────────
 
-def search_chunks(query: str, top_k: int = config.TOP_K) -> list[dict]:
+def search_chunks(query: str, top_k: int = config.TOP_K) -> list[tuple]:
     """
-    Search document_chunks by semantic similarity.
+    Parent-child retrieval: search child chunks by semantic similarity,
+    then fetch the parent section for each match to return full context.
+
+    Step 1: Generate query embedding.
+    Step 2: Search ONLY child chunks (chunk_type = 'child').
+            Over-fetch (top_k * 4) on HNSW path to account for index
+            returning mixed parent/child rows before WHERE filtering.
+    Step 3: For each child, fetch its parent chunk.
+    Step 4: Return list of tuples:
+            (parent_content, source_file, similarity_score, child_content)
+            Falls back to child_content if parent fetch fails.
 
     Primary path  : HNSW index via vss extension (array_distance).
-    Fallback path : Pure SQL cosine similarity using list_cosine_similarity
-                    (dot_product / magnitude_a * magnitude_b), triggered when
-                    the vss search raises any exception.
+    Fallback path : Pure SQL cosine similarity using list_cosine_similarity,
+                    triggered when the vss search raises any exception.
     """
     conn = get_connection()
     query_embedding = generate_embedding(query)
 
+    # Step 2: search child chunks
     try:
+        # Over-fetch so HNSW filtering for chunk_type='child' still yields top_k results
         rows = conn.execute("""
-            SELECT id, content, source_file,
+            SELECT id, content, source_file, parent_id,
                    array_distance(embedding, ?::FLOAT[384]) AS distance
             FROM   document_chunks
+            WHERE  chunk_type = 'child'
             ORDER  BY distance
             LIMIT  ?
-        """, [query_embedding, top_k]).fetchall()
+        """, [query_embedding, top_k * 4]).fetchall()
 
-        return [
-            {
-                "id": r[0],
-                "content": r[1],
-                "source_file": r[2],
-                "similarity": round(1.0 - r[3], 6),
-            }
+        child_rows = [
+            (r[0], r[1], r[2], r[3], round(1.0 - r[4], 6))
             for r in rows
-        ]
+        ][:top_k]
 
     except Exception as vss_err:
         logger.warning(
@@ -118,41 +127,53 @@ def search_chunks(query: str, top_k: int = config.TOP_K) -> list[dict]:
             "Triggering pure SQL cosine similarity fallback."
         )
 
-        # Pure SQL cosine similarity: dot_product(a,b) / (|a| * |b|)
-        # list_cosine_similarity is a built-in DuckDB scalar — no vss required.
-        # If that is somehow unavailable a manual LIST_DOT_PRODUCT variant is used.
         try:
             rows = conn.execute("""
-                SELECT id, content, source_file,
+                SELECT id, content, source_file, parent_id,
                        list_cosine_similarity(embedding, ?::FLOAT[384]) AS similarity
                 FROM   document_chunks
+                WHERE  chunk_type = 'child'
                 ORDER  BY similarity DESC
                 LIMIT  ?
             """, [query_embedding, top_k]).fetchall()
 
         except Exception:
-            # Last-resort: manual dot-product / (norm_a * norm_b) in SQL
             rows = conn.execute("""
-                SELECT id, content, source_file,
+                SELECT id, content, source_file, parent_id,
                        list_dot_product(embedding, ?::FLOAT[384])
                        / (
                            sqrt(list_dot_product(embedding, embedding))
                            * sqrt(list_dot_product(?::FLOAT[384], ?::FLOAT[384]))
                        ) AS similarity
                 FROM   document_chunks
+                WHERE  chunk_type = 'child'
                 ORDER  BY similarity DESC
                 LIMIT  ?
             """, [query_embedding, query_embedding, query_embedding, top_k]).fetchall()
 
-        return [
-            {
-                "id": r[0],
-                "content": r[1],
-                "source_file": r[2],
-                "similarity": round(r[3], 6) if r[3] is not None else 0.0,
-            }
+        child_rows = [
+            (r[0], r[1], r[2], r[3], round(r[4], 6) if r[4] is not None else 0.0)
             for r in rows
         ]
+
+    # Steps 3 & 4: fetch parent for each child result
+    results: list[tuple] = []
+    for _, child_content, source_file, parent_id, similarity in child_rows:
+        if parent_id:
+            try:
+                parent_row = conn.execute("""
+                    SELECT content FROM document_chunks
+                    WHERE  id = ? AND chunk_type = 'parent'
+                """, [parent_id]).fetchone()
+                parent_content = parent_row[0] if parent_row else child_content
+            except Exception:
+                parent_content = child_content
+        else:
+            parent_content = child_content
+
+        results.append((parent_content, source_file, similarity, child_content))
+
+    return results
 
 
 # ── Smoke test ───────────────────────────────────────────────────────────────
