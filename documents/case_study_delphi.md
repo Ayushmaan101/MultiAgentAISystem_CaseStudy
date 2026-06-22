@@ -1,5 +1,5 @@
 ﻿
-**Phase 1: Finalized Tech Stack & Baseline Strategy**
+# Phase 1: Finalized Tech Stack & Baseline Strategy
 
 The core objective of Phase 1 is **functional predictability**. We want to ensure that data flows seamlessly from ingested files into DuckDB, gets accurately routed by the Agno Coordinator, and populates the Agno UI backend without any overlapping points of failure.
 
@@ -14,13 +14,13 @@ The core objective of Phase 1 is **functional predictability**. We want to ensur
 |**LLM Gateway**|**OpenRouter** (Llama 3.3 70B / DeepSeek V3)|Provides access to top-tier reasoning models with structured JSON output enforcement, guarded by a 20 req/min rate limiter filter.|
 |**Tool Suite**|Tavily API, asteval Calculator, DB Lookup|Equips sub-agents with web search, mathematical execution (via a safe AST compiler to prevent arbitrary code execution), and local RAG access.|
 
-**Phase 1 Execution Strategy**
+## Phase 1 Execution Strategy
 
 1. **Database & Schema Initialization:** We configure DuckDB, activate the vss extension, and create a single unified table that stores the raw text chunk, its embedding vector, and comprehensive metadata (source file, file type, timestamp).
 1. **Deterministic Processing:** Files dropped into the ingestion directory are parsed based on extension. Markdown headings are given highest priority for chunk boundaries.
 1. **The Orchestration Test:** We spin up the Agno App as a local FastAPI application. We test the Coordinator agent purely via terminal/curl commands first to ensure it perfectly routes queries to the Document Lookup agent, Calculator agent, or Web Search agent without throwing errors.
 
-**Phase 2: Advanced Pipeline Upgrades (The "Gold Standard")**
+# Phase 2: Advanced Pipeline Upgrades (The "Gold Standard")
 
 Once Phase 1 (our Recursive chunking + vss baseline) is 100% verified, we will systematically layer in these advanced optimizations to maximize accuracy and efficiency:
 
