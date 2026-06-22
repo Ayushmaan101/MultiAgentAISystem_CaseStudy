@@ -96,6 +96,21 @@ flowchart LR
     G -->|No| H[Return top-K\nparent + score]
     H --> I([To Node 5])
 ```
+##### Diagram 4 - LLM provider fallback
+```mermaid
+flowchart LR
+    A([LLM call]) --> B{Task type?}
+    B -->|Routing| C[Ollama phi3.5\nlocal]
+    B -->|Synthesis| F[OpenRouter\nLlama 3.3 70B]
+    C --> D{Reachable?}
+    D -->|Yes| Z([Response])
+    D -->|No| G[Keyword\nfallback]
+    G --> Z
+    F --> H{Success?}
+    H -->|Yes| Z
+    H -->|No| I[Groq\nqwen3-32b]
+    I --> Z
+```
 ### High-Level Flow
 
 ```
