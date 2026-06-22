@@ -74,18 +74,16 @@ def get_chunks(limit: int = Query(default=10, ge=1, le=500)):
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(request: QueryRequest):
     try:
-        routed_to, raw_tool_result, final_answer, classification, rewritten_query, routing_method = (
-            run_coordinator(request.query)
-        )
+        result = run_coordinator(request.query)
         return QueryResponse(
             query=request.query,
-            rewritten_query=rewritten_query,
-            classification=classification,
-            routing_method=routing_method,
-            routed_to=routed_to,
-            raw_tool_result=raw_tool_result,
-            final_answer=final_answer,
-            status="success",
+            rewritten_query=result["rewritten_query"],
+            classification=result["classification"],
+            routing_method=result["routing_method"],
+            routed_to=result["routed_to"],
+            raw_tool_result=result["raw_tool_result"],
+            final_answer=result["final_answer"],
+            status=result["status"],
         )
     except Exception as exc:
         return QueryResponse(

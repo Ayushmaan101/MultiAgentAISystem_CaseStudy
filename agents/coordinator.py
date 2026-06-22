@@ -132,7 +132,7 @@ def _similarity_check(query: str) -> bool:
         if not results:
             print("[Node 2] No KB results → Confirmed SEARCH")
             return False
-        score = results[0]["similarity"]
+        score = results[0][2]  # tuple: (parent_content, source_file, similarity, child_content)
         if score > config.SIMILARITY_THRESHOLD:
             print(f"[Node 2] Top similarity: {score:.4f} → Override to RAG")
             return True
