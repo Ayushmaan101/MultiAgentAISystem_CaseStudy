@@ -48,64 +48,54 @@ documented fallback.
 ## 2. Architecture
 
 ### Architecture Diagram
-![Architecture](docs/architecture.png)
+##### Diagram 1 - Query routing
 ```mermaid
-flowchart TD
-    A([User query]) --> B[Ollama phi3.5 — classify intent\nKB-aware prompt · 15 few-shot examples]
-    B --> C{Classification?}
-    C -->|RAG| F[Query rewriter]
-    C -->|CALCULATOR / MULTI| F
-    C -->|SEARCH| D[Similarity safety net\nDuckDB vector check]
-    D --> E{Score > 0.25?}
-    E -->|Yes — override to RAG| F
-    E -->|No — confirmed SEARCH| F
-    F[Ollama phi3.5 — rewrite query\nInput optimisation · target rewriting] --> G[Python direct dispatch]
-    G --> H{Route to?}
-    H -->|RAG| I[RAG agent\ndocument_lookup]
-    H -->|CALCULATOR| J[Calculator\nsafe_calculate]
-    H -->|SEARCH| K[Web search\nTavily API]
-    H -->|MULTI| L[Tracker agent\nall three tools]
-    I --> M[General reasoning agent\nGroq qwen3-32b · 6-step synthesis]
-    J --> M
-    K --> M
-    L --> M
-    M --> N([Final answer to user])
+flowchart LR
+    A([User query]) --> B[Node 1\nOllama phi3.5\nclassify intent]
+    B --> C{Classification}
+    C -->|RAG| F
+    C -->|CALC / MULTI| F
+    C -->|SEARCH| D[Node 2\nSimilarity\nsafety net]
+    D --> E{Score\n> 0.25?}
+    E -->|Yes → RAG| F
+    E -->|No → SEARCH| F
+    F[Node 3\nOllama phi3.5\nrewrite query] --> G[Node 4\nPython dispatch]
+    G -->|RAG| I[RAG agent]
+    G -->|CALC| J[Calculator]
+    G -->|SEARCH| K[Web search]
+    G -->|MULTI| L[Tracker agent]
+    I & J & K & L --> M[Node 5\nGeneral reasoning\nagent]
+    M --> N([Final answer])
 ```
+##### Diagram 2 - RAG ingestion
 ```mermaid
-flowchart TD
-    A([Document in /documents]) --> B[Detect file type]
-    B --> C{File type?}
-    C -->|.md| D[Parse markdown\npreserve headers]
-    C -->|.pdf| E[Parse PDF\npypdf page by page]
-    C -->|.txt| F[Parse TXT\nraw text read]
-    D --> G[Parent-child chunker\nheader+body=parent · paragraph=child]
-    E --> G
-    F --> G
-    G --> H[Parent chunk\nfull section · chunk_type=parent]
-    G --> I[Child chunk\nparagraph · stores parent_id]
-    H --> J[Generate embedding\nBAAI/bge-small-en-v1.5 · 384D]
-    I --> J
-    J --> K[Upsert to DuckDB\nINSERT OR REPLACE]
-    K --> L{More files?}
+flowchart LR
+    A([Document]) --> B{File type?}
+    B -->|.md| D[Parse\nmarkdown]
+    B -->|.pdf| E[Parse\nPDF]
+    B -->|.txt| F[Parse\nTXT]
+    D & E & F --> G[Parent-child\nchunker]
+    G --> H[Parent chunk\nfull section]
+    G --> I[Child chunk\nparagraph]
+    H & I --> J[Embed\nbge-small-en-v1.5]
+    J --> K[Upsert\nDuckDB]
+    K --> L{More\nfiles?}
     L -->|Yes| B
-    L -->|No| M([Ingestion complete])
+    L -->|No| M([Done])
 ```
+##### Diagram 3 - RAG retrieval
 ```mermaid
-flowchart TD
-    A([Rewritten query from Node 3]) --> B[Generate query embedding\nBAAI/bge-small-en-v1.5]
-    B --> C[HNSW index search — child chunks only\nchunk_type = child]
-    C --> D{VSS extension\navailable?}
-    D -->|Yes| E[Vector similarity search]
-    D -->|No| F[SQL cosine fallback\nlist_cosine_similarity]
-    E --> G[Fetch parent chunk by parent_id\nfull section context]
-    F --> G
-    G --> H{All scores\nbelow 0.15?}
-    H -->|Yes — retry once| C
-    H -->|No| I[Return top-K results\nparent content · source · score · child match]
-    I --> J[Format chunk display]
-    J --> K([Chunks passed to Node 5])
+flowchart LR
+    A([Rewritten query]) --> B[Embed query\n384D vector]
+    B --> C{VSS\navailable?}
+    C -->|Yes| D[HNSW search\nchild chunks only]
+    C -->|No| E[SQL cosine\nfallback]
+    D & E --> F[Fetch parent\nby parent_id]
+    F --> G{All scores\n< 0.15?}
+    G -->|Yes retry once| B
+    G -->|No| H[Return top-K\nparent + score]
+    H --> I([To Node 5])
 ```
-
 ### High-Level Flow
 
 ```
