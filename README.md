@@ -276,15 +276,23 @@ demonstrates genuine deliberate reasoning rather than opaque chaining.
 
 ## 4. Agent Roster
 
+### Genuine Agno Agents (LLM + tools + reasoning loop)
+
 | Agent | Model | Job |
 |---|---|---|
-| Coordinator | Ollama phi3.5 | Orchestrates all five nodes, classifies intent |
-| Query Rewriter | Ollama phi3.5 | Input optimisation and target-specific rewriting |
-| RAG Agent | Groq qwen3-32b | Autonomous retrieval with self-evaluation and retry logic |
-| Tracker Agent | Groq qwen3-32b | Multi-tool orchestration for compound queries |
-| General Reasoning Agent | Groq qwen3-32b | Verbose 6-step synthesis from tool results |
+| Coordinator Shell | Groq gpt-oss-20b | AgentOS UI entry point — receives user message and calls route_query() as a JSON tool call. Framework requirement only, adds no routing intelligence. |
+| RAG Agent | Groq qwen3-32b | Autonomous document retrieval — calls document_lookup(), evaluates chunk similarity scores, retries with refined terms if all scores below 0.15 |
+| Tracker Agent | Groq qwen3-32b | Multi-tool orchestration — handles MULTI queries by calling document_lookup, safe_calculate, and web_search in sequence then combining results |
+| General Reasoning Agent | Groq qwen3-32b | Verbose 6-step synthesis — reasons strictly over raw tool results, never uses training data, cites all sources explicitly |
 
-### Tool Functions (Pure Python)
+### LLM-Powered Functions (not agents — no tools, no reasoning loop)
+
+| Function | Model | Job |
+|---|---|---|
+| Classifier _classify() | Ollama phi3.5 (local) | Outputs exactly one word: RAG / CALCULATOR / SEARCH / MULTI. KB-aware prompt with 15 few-shot examples. Single atomic task. |
+| Query Rewriter rewrite_query() | Ollama phi3.5 (local) | Cleans input and rewrites for target in one atomic call. Strategy is determined externally by the classification passed in — not decided autonomously. |
+
+### Tool Functions (Pure Python — no LLM)
 
 | Function | File | Interacts With |
 |---|---|---|
@@ -292,21 +300,32 @@ demonstrates genuine deliberate reasoning rather than opaque chaining.
 | safe_calculate() | agents/calculator_agent.py | asteval interpreter |
 | web_search() | agents/web_search_agent.py | Tavily Search API |
 
-### Why this hybrid architecture?
+### Why this architecture?
 
-This system uses the Brain and Workers pattern from production
-multi agent systems.
+The system separates four distinct categories of components:
 
-Brain agents (LLM powered) handle probabilistic language driven tasks:
-understanding intent, rewriting queries, evaluating retrieved content,
-reasoning over results, and synthesizing coherent answers.
+1. Agno Agents — used where genuine autonomous reasoning is needed:
+   evaluating retrieval quality, orchestrating multiple tools, and
+   synthesizing grounded answers from evidence.
 
-Worker functions (deterministic Python) handle tasks where reliability
-and exactness matter: math evaluation, vector search, and web API calls.
+2. LLM-powered functions — used where a single deterministic
+   transformation is needed: classifying intent and rewriting queries.
+   Wrapping these in Agent objects would add unnecessary overhead since
+   they require no tools and no multi-step reasoning loop.
 
-This separation means LLM non determinism only affects the parts of
-the system where it is acceptable (language understanding and generation) and not 
-the parts where it is dangerous (tool execution and routing).
+3. Python tool functions — used where deterministic execution matters:
+   math evaluation, vector search, and web API calls. No LLM involved.
+
+4. Coordinator shell — exists purely as an AgentOS UI framework
+   requirement. gpt-oss-20b is chosen specifically because it reliably
+   outputs JSON-formatted tool calls. Llama models on Groq
+   non-deterministically switch to Hermes XML format for tool calls
+   on queries they recognise from training data — Groq rejects this
+   format causing unpredictable failures. gpt-oss-20b as an
+   OpenAI-architecture model always outputs JSON reliably.
+   Additionally, offloading this call to Groq keeps compute pressure
+   off the local machine which is already running Ollama for Nodes
+   1 and 3.
 
 ---
 
@@ -614,7 +633,7 @@ What is the embedding model used and who invented the internet?
 | Criterion | Implementation |
 |---|---|
 | Agent Design — clear reasoning vs prompt chaining | Five agents each with single responsibility. Coordinator classifies before routing. No blind sequential chaining. General Reasoning Agent shows explicit 6-step reasoning on every response. |
-| RAG Quality — relevant retrieval not noise | Structural chunking preserves semantic boundaries. HNSW vector search. Similarity safety net prevents wrong routing. RAG Agent self-evaluates and retries on poor results. |
+| RAG Quality — relevant retrieval not noise | Parent-child chunking preserves semantic boundaries — headers stay with their content, search targets child chunks, LLM receives full parent context. HNSW vector search. Similarity safety net prevents wrong routing. RAG Agent self-evaluates and retries on poor results. |
 | Tool Usage — structured and meaningful | Python direct dispatch with typed inputs and formatted outputs. asteval for math safety. Tavily for structured web results. DuckDB for vector retrieval. |
 | System Design — modular and clean | One file per concern: config.py, llm_client.py, database.py, ingest.py, one file per agent. Each component independently runnable and testable. |
 | Code Quality — readability and organization | Docstrings on all node functions. Typed return values. Every node logs classification, rewritten query, and tool result. |
