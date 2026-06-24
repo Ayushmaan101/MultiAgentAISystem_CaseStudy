@@ -21,6 +21,8 @@ SIMILARITY_THRESHOLD = 0.25             # Node 2: override SEARCH → RAG if sco
 
 DB_PATH = "./db/embeddings.db"
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+# Maximum character length for individual child chunks in markdown paths
+# If a paragraph exceeds this, it is split further on sentence boundaries
+# PDF and TXT paths use paragraph-count grouping instead and ignore this
 CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
 TOP_K = 5
