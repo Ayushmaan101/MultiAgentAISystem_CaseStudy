@@ -17,38 +17,9 @@ Small evaluation dataset (10 queries) covering all four query types for testing 
 | 9 | What is the chunk overlap value? | RAG | Should route to RAG (not SEARCH) due to similarity safety net, answer: 0 (parent-child has no overlap) |
 | 10 | What are the components of the retrieval layer? | RAG | Retrieved chunks describing DuckDB, embeddings, HNSW index, parent-child chunking |
 
-## How to Use This Dataset
-
-Run each query via REST API or AgentOS UI:
-
-```bash
-# Example: Query 3 (CALCULATOR)
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is 15 percent of 240?"}'
-
-# Example: Query 7 (MULTI)
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What does the document say about chunking and what is 500 divided by 6?"}'
-```
-
-For each query, record:
-1. Classification (RAG/CALCULATOR/SEARCH/MULTI)
-2. Similarity score (if RAG)
-3. Raw tool result
-4. Final answer correctness
-5. Response time
-
 ## Coverage
 
 - **RAG queries (4):** Tests document retrieval, similarity scoring, and KB awareness
 - **CALCULATOR queries (2):** Tests plain-language math and expression extraction
 - **SEARCH queries (2):** Tests web search routing and world knowledge questions
 - **MULTI queries (2):** Tests compound query orchestration across multiple tools
-
-## Edge Cases Tested
-
-- Query 9: Similarity safety net override (SEARCH → RAG if KB relevance detected)
-- Query 2: Large retrieved content (all 5 Phase 2 upgrades visible including MMR)
-- Queries 7-8: Multi-tool synchronization and result combination
